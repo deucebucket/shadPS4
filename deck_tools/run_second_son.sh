@@ -37,6 +37,21 @@ case "${sleepq_lock}" in
     exit 2
     ;;
 esac
+sleepq_spins_file="${SECOND_SON_SLEEPQ_SPINS_FILE:-${data_root}/sleepq-spins.txt}"
+sleepq_spins="${SECOND_SON_SLEEPQ_SPINS:-}"
+sleepq_spins_source="environment"
+if [[ -z "${sleepq_spins}" && -r "${sleepq_spins_file}" ]]; then
+  IFS= read -r sleepq_spins <"${sleepq_spins_file}" || true
+  sleepq_spins_source="${sleepq_spins_file}"
+elif [[ -z "${sleepq_spins}" ]]; then
+  sleepq_spins="256"
+  sleepq_spins_source="default"
+fi
+if [[ ! "${sleepq_spins}" =~ ^[0-9]+$ ]] || (( 10#${sleepq_spins} < 1 || 10#${sleepq_spins} > 1048576 )); then
+  echo "Invalid sleep-queue spin limit '${sleepq_spins}'; expected 1 through 1048576" >&2
+  exit 2
+fi
+sleepq_spins="$((10#${sleepq_spins}))"
 source "${repo_dir}/deck_tools/deck_runtime.sh"
 deck_runtime_detect
 
@@ -129,6 +144,8 @@ EOF
   echo "precise_readback_window_source=${readback_window_source}"
   echo "sleepq_lock=${sleepq_lock}"
   echo "sleepq_lock_source=${sleepq_lock_source}"
+  echo "sleepq_spins=${sleepq_spins}"
+  echo "sleepq_spins_source=${sleepq_spins_source}"
   sha256sum "${binary}"
   uname -a
   free -h
@@ -289,6 +306,7 @@ XDG_DATA_HOME="${xdg_data}" MANGOHUD_CONFIGFILE="${mangohud_config}" \
   SHADPS4_PRECISE_READBACK_STATS_INTERVAL="${SHADPS4_PRECISE_READBACK_STATS_INTERVAL:-${readback_stats_interval}}" \
   SHADPS4_PRECISE_READBACK_WINDOW_KB="${SHADPS4_PRECISE_READBACK_WINDOW_KB:-${readback_window_kb}}" \
   SHADPS4_SLEEPQ_LOCK="${SHADPS4_SLEEPQ_LOCK:-${sleepq_lock}}" \
+  SHADPS4_SLEEPQ_SPINS="${SHADPS4_SLEEPQ_SPINS:-${sleepq_spins}}" \
   "${command[@]}" 2>&1 | tee "${run_dir}/console.log"
 exit_status="${PIPESTATUS[0]}"
 set -e

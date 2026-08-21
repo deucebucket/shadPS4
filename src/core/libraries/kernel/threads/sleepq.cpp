@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <cstdlib>
 #include <mutex>
 #include <string_view>
@@ -40,13 +41,34 @@ static SleepQueueLockMode GetSleepQueueLockMode() {
     return mode;
 }
 
+static u32 GetHybridSpinLimit() {
+    static const u32 spin_limit = [] {
+        constexpr u32 DefaultSpinLimit = 256;
+        constexpr unsigned long MaxSpinLimit = 1'048'576;
+        const char* value = std::getenv("SHADPS4_SLEEPQ_SPINS");
+        if (value == nullptr || value[0] == '\0') {
+            return DefaultSpinLimit;
+        }
+
+        char* end = nullptr;
+        errno = 0;
+        const unsigned long parsed = std::strtoul(value, &end, 10);
+        if (errno != 0 || end == value || *end != '\0' || parsed == 0 ||
+            parsed > MaxSpinLimit) {
+            return DefaultSpinLimit;
+        }
+        return static_cast<u32>(parsed);
+    }();
+    return spin_limit;
+}
+
 class HybridSpinLock {
 public:
     void lock() {
         // Sleep-queue critical sections are normally short. Keep their fast path local, but stop
         // burning a host core if the owner was descheduled or the queue is heavily contended.
-        constexpr u32 SpinLimit = 256;
-        for (u32 attempt = 0; attempt < SpinLimit; ++attempt) {
+        const u32 spin_limit = GetHybridSpinLimit();
+        for (u32 attempt = 0; attempt < spin_limit; ++attempt) {
             if (!locked.test(std::memory_order_relaxed) &&
                 !locked.test_and_set(std::memory_order_acquire)) {
                 return;
