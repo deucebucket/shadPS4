@@ -79,6 +79,17 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                         window_kib);
         }
     }
+    if (const char* batch_limit = std::getenv("SHADPS4_PRECISE_READBACK_BATCH_LIMIT")) {
+        char* end = nullptr;
+        const auto parsed = std::strtoull(batch_limit, &end, 10);
+        if (end != batch_limit && *end == '\0' && parsed >= 1 && parsed <= 8) {
+            precise_readback_batch_limit = parsed;
+        } else {
+            LOG_WARNING(Render_Vulkan,
+                        "Ignoring invalid precise readback batch limit '{}'; expected 1 through 8",
+                        batch_limit);
+        }
+    }
     if (precise_readback_stats_enabled) {
         precise_readback_interval_started_nanoseconds = SteadyClockNanoseconds();
         LOG_INFO(Render_Vulkan,
@@ -88,6 +99,11 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     } else if (readback_window_overridden) {
         LOG_INFO(Render_Vulkan, "Precise readback window set to {} KiB",
                  precise_readback_window_size / 1_KB);
+    }
+    if (precise_readback_batch_limit > 1) {
+        LOG_WARNING(Render_Vulkan,
+                    "Experimental precise readback batching enabled with a limit of {} requests",
+                    precise_readback_batch_limit);
     }
 
     // Set up garbage collection parameters
@@ -126,12 +142,36 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write) {
         precise_readback_stats_enabled
             ? precise_readback_outstanding.fetch_add(1, std::memory_order_relaxed) + 1
             : 0;
-    liverpool->SendCommand<true>([this, device_addr, size, is_write, outstanding_depth] {
-        SCOPE_EXIT {
-            if (outstanding_depth != 0) {
-                precise_readback_outstanding.fetch_sub(1, std::memory_order_relaxed);
-            }
+    SCOPE_EXIT {
+        if (outstanding_depth != 0) {
+            precise_readback_outstanding.fetch_sub(1, std::memory_order_relaxed);
+        }
+    };
+
+    if (precise_readback_batch_limit > 1) {
+        PendingReadbackRequest request{
+            .device_addr = device_addr,
+            .size = size,
+            .outstanding_depth = outstanding_depth,
+            .is_write = is_write,
         };
+        bool schedule_batch = false;
+        {
+            std::scoped_lock lock{precise_readback_batch_mutex};
+            precise_readback_batch_requests.push_back(&request);
+            if (!precise_readback_batch_scheduled) {
+                precise_readback_batch_scheduled = true;
+                schedule_batch = true;
+            }
+        }
+        if (schedule_batch) {
+            liverpool->SendCommand([this] { ProcessReadbackBatch(); });
+        }
+        request.completed.acquire();
+        return;
+    }
+
+    liverpool->SendCommand<true>([this, device_addr, size, is_write, outstanding_depth] {
         ReadbackDownloadSample request_sample{};
         const VAddr device_addr_end = device_addr + size;
         ForEachBufferInRange(device_addr, size, [&](BufferId, Buffer& buffer) {
@@ -151,6 +191,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write) {
             request_sample.bytes += sample.bytes;
             request_sample.call_count += sample.call_count;
             request_sample.copy_count += sample.copy_count;
+            request_sample.finish_call_count += sample.finish_call_count;
             request_sample.finish_nanoseconds += sample.finish_nanoseconds;
             request_sample.submit_nanoseconds += sample.submit_nanoseconds;
             request_sample.wait_nanoseconds += sample.wait_nanoseconds;
@@ -174,6 +215,10 @@ void BufferCache::RecordPreciseReadbackStats(VAddr device_addr, u64 size, bool i
     precise_readback_outstanding_depth_sum += outstanding_depth;
     precise_readback_max_outstanding_depth =
         std::max(precise_readback_max_outstanding_depth, outstanding_depth);
+    precise_readback_finish_calls += sample.finish_call_count;
+    precise_readback_shared_requests += sample.batch_size > 1;
+    precise_readback_batch_size_sum += sample.batch_size;
+    precise_readback_max_batch_size = std::max(precise_readback_max_batch_size, sample.batch_size);
     precise_readback_writes += is_write;
     precise_readback_requested_bytes += size;
     precise_readback_download_calls += sample.call_count;
@@ -265,6 +310,8 @@ void BufferCache::LogPreciseReadbackStats() {
     const double average_outstanding_depth =
         static_cast<double>(precise_readback_outstanding_depth_sum) /
         static_cast<double>(precise_readback_requests);
+    const double average_batch_size = static_cast<double>(precise_readback_batch_size_sum) /
+                                      static_cast<double>(precise_readback_requests);
     const double wall_ms = static_cast<double>(interval_wall_nanoseconds) / 1'000'000.0;
     const double requests_per_second = interval_wall_nanoseconds != 0
                                            ? static_cast<double>(precise_readback_requests) *
@@ -286,7 +333,8 @@ void BufferCache::LogPreciseReadbackStats() {
              "no_downloads={} finish_total_ms={:.3f} finish_avg_ms={:.3f} finish_max_ms={:.3f} "
              "submit_total_ms={:.3f} wait_total_ms={:.3f} submit_share_pct={:.1f} "
              "wait_share_pct={:.1f} queued_requests={} avg_outstanding_depth={:.2f} "
-             "max_outstanding_depth={} wall_ms={:.3f} request_rate={:.1f} "
+             "max_outstanding_depth={} finish_calls={} shared_requests={} "
+             "avg_batch_size={:.2f} max_batch_size={} wall_ms={:.3f} request_rate={:.1f} "
              "finish_share_pct={:.1f} "
              "amplification={:.1f}x hot=[{:#x}:{}(w{}), {:#x}:{}(w{}), {:#x}:{}(w{})]",
              precise_readback_window_size / 1_KB, precise_readback_requests,
@@ -296,15 +344,21 @@ void BufferCache::LogPreciseReadbackStats() {
              precise_readback_downloaded_bytes, precise_readback_no_downloads, finish_total_ms,
              finish_average_ms, finish_max_ms, submit_total_ms, wait_total_ms, submit_share,
              wait_share, precise_readback_queued_requests, average_outstanding_depth,
-             precise_readback_max_outstanding_depth, wall_ms, requests_per_second, finish_share,
-             amplification, first.address, first.interval_requests, first.interval_writes,
-             second.address, second.interval_requests, second.interval_writes, third.address,
+             precise_readback_max_outstanding_depth, precise_readback_finish_calls,
+             precise_readback_shared_requests, average_batch_size, precise_readback_max_batch_size,
+             wall_ms, requests_per_second, finish_share, amplification, first.address,
+             first.interval_requests, first.interval_writes, second.address,
+             second.interval_requests, second.interval_writes, third.address,
              third.interval_requests, third.interval_writes);
 
     precise_readback_requests = 0;
     precise_readback_queued_requests = 0;
     precise_readback_outstanding_depth_sum = 0;
     precise_readback_max_outstanding_depth = 0;
+    precise_readback_finish_calls = 0;
+    precise_readback_shared_requests = 0;
+    precise_readback_batch_size_sum = 0;
+    precise_readback_max_batch_size = 0;
     precise_readback_writes = 0;
     precise_readback_requested_bytes = 0;
     precise_readback_bounded_repeats = 0;
@@ -323,11 +377,14 @@ void BufferCache::LogPreciseReadbackStats() {
     }
 }
 
-BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& buffer,
-                                                                      VAddr device_addr, u64 size,
-                                                                      bool measure_finish) {
-    ReadbackDownloadSample sample{};
-    boost::container::small_vector<vk::BufferCopy, 1> copies;
+BufferCache::PreparedReadbackDownload BufferCache::PrepareDownloadBufferMemory(Buffer& buffer,
+                                                                               VAddr device_addr,
+                                                                               u64 size) {
+    PreparedReadbackDownload download{
+        .buffer_addr = buffer.CpuAddr(),
+        .device_addr = device_addr,
+        .size = size,
+    };
     u64 total_size_bytes = 0;
     memory_tracker->ForEachDownloadRange<false>(
         device_addr, size, [&](u64 device_addr_out, u64 range_size) {
@@ -335,7 +392,7 @@ BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& bu
             const auto add_download = [&](VAddr start, VAddr end) {
                 const u64 new_offset = start - buffer_addr;
                 const u64 new_size = end - start;
-                copies.push_back(vk::BufferCopy{
+                download.copies.push_back(vk::BufferCopy{
                     .srcOffset = new_offset,
                     .dstOffset = total_size_bytes,
                     .size = new_size,
@@ -349,15 +406,13 @@ BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& bu
             gpu_modified_ranges.Subtract(device_addr_out, range_size);
         });
     if (total_size_bytes == 0) {
-        return sample;
+        return download;
     }
-    sample.bytes = total_size_bytes;
-    sample.call_count = 1;
-    sample.copy_count = copies.size();
-    const auto [download, offset] = download_buffer.Map(total_size_bytes);
-    ASSERT_MSG(download != nullptr, "Buffer download of {} bytes exceeds the {} byte readback ring",
-               total_size_bytes, DownloadBufferSize);
-    for (auto& copy : copies) {
+    const auto [mapped_data, offset] = download_buffer.Map(total_size_bytes);
+    ASSERT_MSG(mapped_data != nullptr,
+               "Buffer download of {} bytes exceeds the {} byte readback ring", total_size_bytes,
+               DownloadBufferSize);
+    for (auto& copy : download.copies) {
         // Modify copies to have the staging offset in mind
         copy.dstOffset += offset;
     }
@@ -379,23 +434,42 @@ BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& bu
         .bufferMemoryBarrierCount = 1,
         .pBufferMemoryBarriers = &pre_barrier,
     });
-    cmdbuf.copyBuffer(buffer.buffer, download_buffer.Handle(), copies);
-    const VAddr buffer_addr = buffer.CpuAddr();
-    const auto write_data = [this, copies = std::move(copies), buffer_addr, device_addr, size,
-                             download, offset, total_size_bytes]() {
-        if (!download_buffer.is_coherent) {
-            vmaInvalidateAllocation(instance.GetAllocator(), download_buffer.buffer.allocation,
-                                    offset, total_size_bytes);
-        }
-        auto* memory = Core::Memory::Instance();
-        for (const auto& copy : copies) {
-            const VAddr copy_device_addr = buffer_addr + copy.srcOffset;
-            const u64 dst_offset = copy.dstOffset - offset;
-            memory->TryWriteBacking(std::bit_cast<u8*>(copy_device_addr), download + dst_offset,
-                                    copy.size);
-        }
-        memory_tracker->UnmarkRegionAsGpuModified(device_addr, size);
-    };
+    cmdbuf.copyBuffer(buffer.buffer, download_buffer.Handle(), download.copies);
+    download.download = mapped_data;
+    download.offset = offset;
+    download.total_size_bytes = total_size_bytes;
+    return download;
+}
+
+void BufferCache::CompleteDownloadBufferMemory(const PreparedReadbackDownload& download) {
+    if (download.total_size_bytes == 0) {
+        return;
+    }
+    if (!download_buffer.is_coherent) {
+        vmaInvalidateAllocation(instance.GetAllocator(), download_buffer.buffer.allocation,
+                                download.offset, download.total_size_bytes);
+    }
+    for (const auto& copy : download.copies) {
+        const VAddr copy_device_addr = download.buffer_addr + copy.srcOffset;
+        const u64 dst_offset = copy.dstOffset - download.offset;
+        memory->TryWriteBacking(std::bit_cast<u8*>(copy_device_addr),
+                                download.download + dst_offset, copy.size);
+    }
+    memory_tracker->UnmarkRegionAsGpuModified(download.device_addr, download.size);
+}
+
+BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& buffer,
+                                                                      VAddr device_addr, u64 size,
+                                                                      bool measure_finish) {
+    auto download = PrepareDownloadBufferMemory(buffer, device_addr, size);
+    ReadbackDownloadSample sample{};
+    if (download.total_size_bytes == 0) {
+        return sample;
+    }
+    sample.bytes = download.total_size_bytes;
+    sample.call_count = 1;
+    sample.copy_count = download.copies.size();
+    sample.finish_call_count = 1;
     const auto finish_start =
         measure_finish ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
     if (measure_finish) {
@@ -411,8 +485,111 @@ BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& bu
                                  std::chrono::steady_clock::now() - finish_start)
                                  .count());
     }
-    write_data();
+    CompleteDownloadBufferMemory(download);
     return sample;
+}
+
+BufferCache::PreparedReadbackRequest BufferCache::PrepareReadbackRequest(
+    PendingReadbackRequest& request) {
+    PreparedReadbackRequest prepared{
+        .request = &request,
+    };
+    const VAddr device_addr_end = request.device_addr + request.size;
+    ForEachBufferInRange(request.device_addr, request.size, [&](BufferId, Buffer& buffer) {
+        const VAddr buffer_start = buffer.CpuAddr();
+        const VAddr buffer_end = buffer_start + buffer.SizeBytes();
+        const VAddr intersection_start = std::max(request.device_addr, buffer_start);
+        const VAddr intersection_end = std::min(device_addr_end, buffer_end);
+        const VAddr window_start = std::max<VAddr>(
+            Common::AlignDown(intersection_start, precise_readback_window_size), buffer_start);
+        const VAddr window_end = std::min<VAddr>(
+            std::max<VAddr>(window_start + precise_readback_window_size, intersection_end),
+            buffer_end);
+        auto download =
+            PrepareDownloadBufferMemory(buffer, window_start, window_end - window_start);
+        if (download.total_size_bytes == 0) {
+            return;
+        }
+        prepared.sample.bytes += download.total_size_bytes;
+        prepared.sample.call_count++;
+        prepared.sample.copy_count += download.copies.size();
+        prepared.downloads.push_back(std::move(download));
+    });
+    return prepared;
+}
+
+void BufferCache::ProcessReadbackBatch() {
+    while (true) {
+        boost::container::small_vector<PendingReadbackRequest*, 8> batch;
+        {
+            std::scoped_lock lock{precise_readback_batch_mutex};
+            if (precise_readback_batch_requests.empty()) {
+                precise_readback_batch_scheduled = false;
+                return;
+            }
+            const size_t request_count = std::min<size_t>(precise_readback_batch_limit,
+                                                          precise_readback_batch_requests.size());
+            for (size_t index = 0; index < request_count; ++index) {
+                batch.push_back(precise_readback_batch_requests.front());
+                precise_readback_batch_requests.pop_front();
+            }
+        }
+
+        boost::container::small_vector<PreparedReadbackRequest, 8> prepared_requests;
+        prepared_requests.reserve(batch.size());
+        for (auto* request : batch) {
+            prepared_requests.push_back(PrepareReadbackRequest(*request));
+        }
+
+        const auto timing_started = precise_readback_stats_enabled
+                                        ? std::chrono::steady_clock::now()
+                                        : std::chrono::steady_clock::time_point{};
+        const bool has_downloads =
+            std::ranges::any_of(prepared_requests, [](const PreparedReadbackRequest& prepared) {
+                return !prepared.downloads.empty();
+            });
+        Vulkan::Scheduler::FinishTiming timing{};
+        if (has_downloads) {
+            if (precise_readback_stats_enabled) {
+                timing = scheduler.FinishWithTiming();
+            } else {
+                scheduler.Finish();
+            }
+        }
+        const u64 finish_nanoseconds =
+            precise_readback_stats_enabled && has_downloads
+                ? static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                       std::chrono::steady_clock::now() - timing_started)
+                                       .count())
+                : 0;
+
+        bool assigned_finish = false;
+        for (auto& prepared : prepared_requests) {
+            prepared.sample.batch_size = batch.size();
+            if (!assigned_finish && !prepared.downloads.empty()) {
+                prepared.sample.finish_call_count = 1;
+                prepared.sample.finish_nanoseconds = finish_nanoseconds;
+                prepared.sample.submit_nanoseconds = timing.submit_nanoseconds;
+                prepared.sample.wait_nanoseconds = timing.wait_nanoseconds;
+                assigned_finish = true;
+            }
+            for (const auto& download : prepared.downloads) {
+                CompleteDownloadBufferMemory(download);
+            }
+            if (prepared.request->is_write) {
+                memory_tracker->MarkRegionAsCpuModified(prepared.request->device_addr,
+                                                        prepared.request->size);
+            }
+            if (precise_readback_stats_enabled) {
+                RecordPreciseReadbackStats(prepared.request->device_addr, prepared.request->size,
+                                           prepared.request->is_write,
+                                           prepared.request->outstanding_depth, prepared.sample);
+            }
+        }
+        for (auto* request : batch) {
+            request->completed.release();
+        }
+    }
 }
 
 void BufferCache::BindVertexBuffers(

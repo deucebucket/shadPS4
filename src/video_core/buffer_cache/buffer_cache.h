@@ -5,6 +5,9 @@
 
 #include <array>
 #include <atomic>
+#include <deque>
+#include <mutex>
+#include <semaphore>
 
 #include <boost/container/small_vector.hpp>
 #include "common/lru_cache.h"
@@ -163,9 +166,35 @@ private:
         u64 bytes{};
         u64 call_count{};
         u64 copy_count{};
+        u64 finish_call_count{};
+        u64 batch_size{1};
         u64 finish_nanoseconds{};
         u64 submit_nanoseconds{};
         u64 wait_nanoseconds{};
+    };
+
+    struct PendingReadbackRequest {
+        VAddr device_addr{};
+        u64 size{};
+        u64 outstanding_depth{};
+        bool is_write{};
+        std::binary_semaphore completed{0};
+    };
+
+    struct PreparedReadbackDownload {
+        boost::container::small_vector<vk::BufferCopy, 1> copies;
+        VAddr buffer_addr{};
+        VAddr device_addr{};
+        u64 size{};
+        u8* download{};
+        u64 offset{};
+        u64 total_size_bytes{};
+    };
+
+    struct PreparedReadbackRequest {
+        PendingReadbackRequest* request{};
+        ReadbackDownloadSample sample{};
+        boost::container::small_vector<PreparedReadbackDownload, 1> downloads;
     };
 
     template <typename Func>
@@ -183,6 +212,15 @@ private:
 
     ReadbackDownloadSample DownloadBufferMemory(Buffer& buffer, VAddr device_addr, u64 size,
                                                 bool measure_finish = false);
+
+    PreparedReadbackDownload PrepareDownloadBufferMemory(Buffer& buffer, VAddr device_addr,
+                                                         u64 size);
+
+    void CompleteDownloadBufferMemory(const PreparedReadbackDownload& download);
+
+    PreparedReadbackRequest PrepareReadbackRequest(PendingReadbackRequest& request);
+
+    void ProcessReadbackBatch();
 
     void RecordPreciseReadbackStats(VAddr device_addr, u64 size, bool is_write,
                                     u64 outstanding_depth, const ReadbackDownloadSample& sample);
@@ -254,6 +292,10 @@ private:
     bool precise_readback_stats_enabled{};
     u64 precise_readback_stats_interval{128};
     u64 precise_readback_window_size{512_KB};
+    u64 precise_readback_batch_limit{1};
+    std::mutex precise_readback_batch_mutex;
+    std::deque<PendingReadbackRequest*> precise_readback_batch_requests;
+    bool precise_readback_batch_scheduled{};
     u64 precise_readback_interval_started_nanoseconds{};
     u64 precise_readback_sequence{};
     std::atomic<u64> precise_readback_outstanding{};
@@ -261,6 +303,10 @@ private:
     u64 precise_readback_queued_requests{};
     u64 precise_readback_outstanding_depth_sum{};
     u64 precise_readback_max_outstanding_depth{};
+    u64 precise_readback_finish_calls{};
+    u64 precise_readback_shared_requests{};
+    u64 precise_readback_batch_size_sum{};
+    u64 precise_readback_max_batch_size{};
     u64 precise_readback_writes{};
     u64 precise_readback_requested_bytes{};
     u64 precise_readback_bounded_repeats{};

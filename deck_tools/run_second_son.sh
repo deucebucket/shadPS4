@@ -20,6 +20,18 @@ elif [[ -r "${readback_window_file}" ]]; then
 else
   readback_window_kb="512"
 fi
+readback_batch_file="${SECOND_SON_READBACK_BATCH_FILE:-${data_root}/readback-batch-limit.txt}"
+readback_batch_source="default"
+if [[ -n "${SECOND_SON_READBACK_BATCH_LIMIT:-}" ]]; then
+  readback_batch_limit="${SECOND_SON_READBACK_BATCH_LIMIT}"
+  readback_batch_source="environment"
+elif [[ -r "${readback_batch_file}" ]]; then
+  IFS= read -r readback_batch_limit <"${readback_batch_file}" || true
+  readback_batch_limit="${readback_batch_limit:-1}"
+  readback_batch_source="${readback_batch_file}"
+else
+  readback_batch_limit="1"
+fi
 source "${repo_dir}/deck_tools/deck_runtime.sh"
 deck_runtime_detect
 
@@ -110,6 +122,8 @@ EOF
   echo "precise_readback_stats_interval=${readback_stats_interval}"
   echo "precise_readback_window_kb=${readback_window_kb}"
   echo "precise_readback_window_source=${readback_window_source}"
+  echo "precise_readback_batch_limit=${readback_batch_limit}"
+  echo "precise_readback_batch_source=${readback_batch_source}"
   sha256sum "${binary}"
   uname -a
   free -h
@@ -269,6 +283,7 @@ XDG_DATA_HOME="${xdg_data}" MANGOHUD_CONFIGFILE="${mangohud_config}" \
   SHADPS4_PRECISE_READBACK_STATS="${SHADPS4_PRECISE_READBACK_STATS:-${readback_stats}}" \
   SHADPS4_PRECISE_READBACK_STATS_INTERVAL="${SHADPS4_PRECISE_READBACK_STATS_INTERVAL:-${readback_stats_interval}}" \
   SHADPS4_PRECISE_READBACK_WINDOW_KB="${SHADPS4_PRECISE_READBACK_WINDOW_KB:-${readback_window_kb}}" \
+  SHADPS4_PRECISE_READBACK_BATCH_LIMIT="${SHADPS4_PRECISE_READBACK_BATCH_LIMIT:-${readback_batch_limit}}" \
   "${command[@]}" 2>&1 | tee "${run_dir}/console.log"
 exit_status="${PIPESTATUS[0]}"
 set -e
