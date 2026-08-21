@@ -123,9 +123,36 @@ fi
 case "${readback_write_site_window}" in
   off) ;;
   *)
-    if [[ ! "${readback_write_site_window}" =~ ^0[xX][0-9a-fA-F]+:(4|8|16|32|64|128|256|512)$ ]] ||
-       [[ "${readback_write_site_window}" =~ ^0[xX]0+: ]]; then
-      echo "Ignoring invalid precise write-site window '${readback_write_site_window}'; expected nonzero-hex-pc:4|8|16|32|64|128|256|512" >&2
+    readback_write_site_window_valid="1"
+    IFS=',' read -r -a readback_write_site_window_items <<<"${readback_write_site_window}"
+    declare -A readback_write_site_window_seen=()
+    if [[ "${readback_write_site_window}" == ,* ||
+          "${readback_write_site_window}" == *, ||
+          "${readback_write_site_window}" == *,,* ]] ||
+       (( ${#readback_write_site_window_items[@]} < 1 ||
+          ${#readback_write_site_window_items[@]} > 4 )); then
+      readback_write_site_window_valid="0"
+    else
+      for readback_write_site_window_item in "${readback_write_site_window_items[@]}"; do
+        readback_write_site_window_pc="${readback_write_site_window_item%%:*}"
+        readback_write_site_window_pc="${readback_write_site_window_pc,,}"
+        readback_write_site_window_hex="${readback_write_site_window_pc:2}"
+        while [[ "${#readback_write_site_window_hex}" -gt 1 &&
+                 "${readback_write_site_window_hex}" == 0* ]]; do
+          readback_write_site_window_hex="${readback_write_site_window_hex:1}"
+        done
+        readback_write_site_window_key="0x${readback_write_site_window_hex}"
+        if [[ ! "${readback_write_site_window_item}" =~ ^0[xX][0-9a-fA-F]{1,16}:(4|8|16|32|64|128|256|512)$ ]] ||
+           [[ "${readback_write_site_window_item}" =~ ^0[xX]0+: ]] ||
+           [[ -n "${readback_write_site_window_seen[${readback_write_site_window_key}]:-}" ]]; then
+          readback_write_site_window_valid="0"
+          break
+        fi
+        readback_write_site_window_seen[${readback_write_site_window_key}]="1"
+      done
+    fi
+    if [[ "${readback_write_site_window_valid}" != "1" ]]; then
+      echo "Ignoring invalid precise write-site windows '${readback_write_site_window}'; expected one through four unique nonzero-hex-pc:4|8|16|32|64|128|256|512 entries" >&2
       readback_write_site_window="off"
       readback_write_site_window_source="invalid-fallback"
     fi

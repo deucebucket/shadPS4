@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <string_view>
@@ -81,20 +82,70 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         }
     }
     if (const char* site_window = std::getenv("SHADPS4_PRECISE_READBACK_WRITE_SITE_WINDOW")) {
-        char* separator = nullptr;
-        const auto parsed_pc = std::strtoull(site_window, &separator, 0);
-        char* end = nullptr;
-        const auto parsed_window =
-            separator != nullptr && *separator == ':' ? std::strtoull(separator + 1, &end, 10) : 0;
-        if (parsed_pc != 0 && separator != site_window && *separator == ':' &&
-            end != separator + 1 && *end == '\0' && parsed_window >= 4 && parsed_window <= 512 &&
-            (parsed_window & (parsed_window - 1)) == 0) {
-            precise_readback_write_site_pc = parsed_pc;
-            precise_readback_write_site_window_size = parsed_window * 1_KB;
+        std::array<PreciseReadbackWriteSiteWindow, PreciseReadbackWriteSiteWindowCount> parsed{};
+        size_t parsed_count = 0;
+        bool valid = site_window[0] != '\0' && std::string_view{site_window} != "off";
+        const char* cursor = site_window;
+        while (valid) {
+            if (parsed_count == parsed.size()) {
+                valid = false;
+                break;
+            }
+            const auto is_hex_digit = [](char value) {
+                return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') ||
+                       (value >= 'A' && value <= 'F');
+            };
+            const bool has_hex_prefix = cursor[0] == '0' &&
+                                        (cursor[1] == 'x' || cursor[1] == 'X') &&
+                                        is_hex_digit(cursor[2]);
+            char* separator = nullptr;
+            errno = 0;
+            const auto parsed_pc = std::strtoull(cursor, &separator, 0);
+            const bool pc_out_of_range = errno == ERANGE;
+            char* end = nullptr;
+            errno = 0;
+            const auto parsed_window = separator != nullptr && *separator == ':'
+                                           ? std::strtoull(separator + 1, &end, 10)
+                                           : 0;
+            const bool window_out_of_range = errno == ERANGE;
+            const std::string_view window_text =
+                end != nullptr && separator != nullptr && end >= separator + 1
+                    ? std::string_view{separator + 1,
+                                       static_cast<size_t>(end - (separator + 1))}
+                    : std::string_view{};
+            const bool canonical_window =
+                window_text == "4" || window_text == "8" || window_text == "16" ||
+                window_text == "32" || window_text == "64" || window_text == "128" ||
+                window_text == "256" || window_text == "512";
+            const bool duplicate = std::ranges::any_of(
+                parsed.begin(), parsed.begin() + parsed_count,
+                [parsed_pc](const auto& entry) { return entry.fault_pc == parsed_pc; });
+            if (!has_hex_prefix || pc_out_of_range || window_out_of_range || parsed_pc == 0 ||
+                separator == cursor || *separator != ':' || !canonical_window ||
+                end == separator + 1 || (*end != '\0' && *end != ',') || parsed_window < 4 ||
+                parsed_window > 512 || (parsed_window & (parsed_window - 1)) != 0 || duplicate) {
+                valid = false;
+                break;
+            }
+            parsed[parsed_count++] = {
+                .fault_pc = parsed_pc,
+                .window_size = parsed_window * 1_KB,
+            };
+            if (*end == '\0') {
+                break;
+            }
+            cursor = end + 1;
+            if (*cursor == '\0') {
+                valid = false;
+            }
+        }
+        if (valid) {
+            precise_readback_write_site_windows = parsed;
+            precise_readback_write_site_window_count = parsed_count;
         } else if (site_window[0] != '\0' && std::string_view{site_window} != "off") {
             LOG_WARNING(Render_Vulkan,
-                        "Ignoring invalid precise write-site window '{}'; expected "
-                        "<nonzero-pc>:<power-of-two-KiB-from-4-through-512>",
+                        "Ignoring invalid precise write-site windows '{}'; expected one through "
+                        "four unique <nonzero-pc>:<power-of-two-KiB-from-4-through-512> entries",
                         site_window);
         }
     }
@@ -108,9 +159,10 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         LOG_INFO(Render_Vulkan, "Precise readback window set to {} KiB",
                  precise_readback_window_size / 1_KB);
     }
-    if (precise_readback_write_site_pc != 0) {
+    for (size_t index = 0; index < precise_readback_write_site_window_count; ++index) {
+        const auto& entry = precise_readback_write_site_windows[index];
         LOG_INFO(Render_Vulkan, "Precise write-site window enabled for guest PC {:#x}: {} KiB",
-                 precise_readback_write_site_pc, precise_readback_write_site_window_size / 1_KB);
+                 entry.fault_pc, entry.window_size / 1_KB);
     }
 
     // Set up garbage collection parameters
@@ -148,16 +200,24 @@ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size,
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write,
                              Common::FaultContext fault_context) {
-    const u64 request_window_size = precise_readback_write_site_pc != 0 && is_write &&
-                                            fault_context.rip == precise_readback_write_site_pc
-                                        ? precise_readback_write_site_window_size
-                                        : precise_readback_window_size;
+    u64 request_window_size = precise_readback_window_size;
+    bool used_write_site_window = false;
+    if (is_write) {
+        for (size_t index = 0; index < precise_readback_write_site_window_count; ++index) {
+            const auto& entry = precise_readback_write_site_windows[index];
+            if (fault_context.rip == entry.fault_pc) {
+                request_window_size = entry.window_size;
+                used_write_site_window = true;
+                break;
+            }
+        }
+    }
     const u64 outstanding_depth =
         precise_readback_stats_enabled
             ? precise_readback_outstanding.fetch_add(1, std::memory_order_relaxed) + 1
             : 0;
     liverpool->SendCommand<true>([this, device_addr, size, is_write, fault_context,
-                                  request_window_size, outstanding_depth] {
+                                  request_window_size, used_write_site_window, outstanding_depth] {
         SCOPE_EXIT {
             if (outstanding_depth != 0) {
                 precise_readback_outstanding.fetch_sub(1, std::memory_order_relaxed);
@@ -190,14 +250,14 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write,
         }
         if (precise_readback_stats_enabled) {
             RecordPreciseReadbackStats(device_addr, size, is_write, fault_context,
-                                       request_window_size, outstanding_depth, request_sample);
+                                       used_write_site_window, outstanding_depth, request_sample);
         }
     });
 }
 
 void BufferCache::RecordPreciseReadbackStats(VAddr device_addr, u64 size, bool is_write,
                                              const Common::FaultContext& fault_context,
-                                             u64 request_window_size, u64 outstanding_depth,
+                                             bool used_write_site_window, u64 outstanding_depth,
                                              const ReadbackDownloadSample& sample) {
     precise_readback_sequence++;
     precise_readback_requests++;
@@ -216,10 +276,7 @@ void BufferCache::RecordPreciseReadbackStats(VAddr device_addr, u64 size, bool i
     precise_readback_wait_nanoseconds += sample.wait_nanoseconds;
     precise_readback_max_finish_nanoseconds =
         std::max(precise_readback_max_finish_nanoseconds, sample.finish_nanoseconds);
-    precise_readback_write_site_window_hits +=
-        precise_readback_write_site_pc != 0 && is_write &&
-        fault_context.rip == precise_readback_write_site_pc &&
-        request_window_size == precise_readback_write_site_window_size;
+    precise_readback_write_site_window_hits += used_write_site_window;
 
     const VAddr page_address = Common::AlignDown(device_addr, ReadbackStatsPageSize);
     auto page = std::ranges::find_if(
@@ -380,6 +437,15 @@ void BufferCache::LogPreciseReadbackStats() {
                                      ? static_cast<double>(precise_readback_downloaded_bytes) /
                                            static_cast<double>(precise_readback_requested_bytes)
                                      : 0.0;
+    u64 common_site_window_size = precise_readback_write_site_window_count != 0
+                                      ? precise_readback_write_site_windows[0].window_size
+                                      : 0;
+    for (size_t index = 1; index < precise_readback_write_site_window_count; ++index) {
+        if (precise_readback_write_site_windows[index].window_size != common_site_window_size) {
+            common_site_window_size = 0;
+            break;
+        }
+    }
     LOG_INFO(
         Render_Vulkan,
         "Precise readback stats: window_kib={} requests={} writes={} reads={} "
@@ -403,7 +469,7 @@ void BufferCache::LogPreciseReadbackStats() {
         precise_readback_no_downloads, finish_total_ms, finish_average_ms, finish_max_ms,
         submit_total_ms, wait_total_ms, submit_share, wait_share, precise_readback_queued_requests,
         average_outstanding_depth, precise_readback_max_outstanding_depth, wall_ms,
-        requests_per_second, finish_share, precise_readback_write_site_window_size / 1_KB,
+        requests_per_second, finish_share, common_site_window_size / 1_KB,
         precise_readback_write_site_window_hits, amplification, first.address,
         first.interval_requests, first.interval_writes, second.address, second.interval_requests,
         second.interval_writes, third.address, third.interval_requests, third.interval_writes,
