@@ -2,21 +2,69 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <mutex>
+#include <string_view>
 #include "common/spin_lock.h"
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/libraries/kernel/threads/sleepq.h"
 
 namespace Libraries::Kernel {
 
-static bool UseHostMutex() {
-    static const bool use_host_mutex = [] {
-        const char* value = std::getenv("SHADPS4_SLEEPQ_USE_MUTEX");
-        return value != nullptr && value[0] != '\0' && value[0] != '0';
+enum class SleepQueueLockMode {
+    Spin,
+    Mutex,
+    Hybrid,
+};
+
+static SleepQueueLockMode GetSleepQueueLockMode() {
+    static const SleepQueueLockMode mode = [] {
+        if (const char* value = std::getenv("SHADPS4_SLEEPQ_LOCK")) {
+            if (std::string_view{value} == "mutex") {
+                return SleepQueueLockMode::Mutex;
+            }
+            if (std::string_view{value} == "hybrid") {
+                return SleepQueueLockMode::Hybrid;
+            }
+        }
+
+        // Keep the first experiment's boolean switch working for reproducible old runs.
+        const char* use_host_mutex = std::getenv("SHADPS4_SLEEPQ_USE_MUTEX");
+        if (use_host_mutex != nullptr && use_host_mutex[0] != '\0' &&
+            use_host_mutex[0] != '0') {
+            return SleepQueueLockMode::Mutex;
+        }
+        return SleepQueueLockMode::Spin;
     }();
-    return use_host_mutex;
+    return mode;
 }
+
+class HybridSpinLock {
+public:
+    void lock() {
+        // Sleep-queue critical sections are normally short. Keep their fast path local, but stop
+        // burning a host core if the owner was descheduled or the queue is heavily contended.
+        constexpr u32 SpinLimit = 256;
+        for (u32 attempt = 0; attempt < SpinLimit; ++attempt) {
+            if (!locked.test(std::memory_order_relaxed) &&
+                !locked.test_and_set(std::memory_order_acquire)) {
+                return;
+            }
+        }
+        while (locked.test_and_set(std::memory_order_acquire)) {
+            locked.wait(true, std::memory_order_relaxed);
+        }
+    }
+
+    void unlock() {
+        locked.clear(std::memory_order_release);
+        locked.notify_one();
+    }
+
+private:
+    std::atomic_flag locked = ATOMIC_FLAG_INIT;
+};
 
 static constexpr int HASHSHIFT = 9;
 static constexpr int HASHSIZE = (1 << HASHSHIFT);
@@ -26,23 +74,36 @@ static constexpr int HASHSIZE = (1 << HASHSHIFT);
 
 struct SleepQueueChain {
     void Lock() {
-        if (UseHostMutex()) {
+        switch (GetSleepQueueLockMode()) {
+        case SleepQueueLockMode::Mutex:
             mutex.lock();
-        } else {
+            break;
+        case SleepQueueLockMode::Hybrid:
+            hybrid_lock.lock();
+            break;
+        case SleepQueueLockMode::Spin:
             spin_lock.lock();
+            break;
         }
     }
 
     void Unlock() {
-        if (UseHostMutex()) {
+        switch (GetSleepQueueLockMode()) {
+        case SleepQueueLockMode::Mutex:
             mutex.unlock();
-        } else {
+            break;
+        case SleepQueueLockMode::Hybrid:
+            hybrid_lock.unlock();
+            break;
+        case SleepQueueLockMode::Spin:
             spin_lock.unlock();
+            break;
         }
     }
 
     Common::SpinLock spin_lock;
     std::mutex mutex;
+    HybridSpinLock hybrid_lock;
     SleepqList sc_queues;
     int sc_type;
 };

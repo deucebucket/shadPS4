@@ -31,10 +31,9 @@ elif [[ -z "${sleepq_lock}" ]]; then
   sleepq_lock_source="default"
 fi
 case "${sleepq_lock}" in
-  mutex) sleepq_use_mutex=1 ;;
-  spin) sleepq_use_mutex=0 ;;
+  spin|mutex|hybrid) ;;
   *)
-    echo "Invalid sleep-queue lock '${sleepq_lock}'; expected spin or mutex" >&2
+    echo "Invalid sleep-queue lock '${sleepq_lock}'; expected spin, mutex, or hybrid" >&2
     exit 2
     ;;
 esac
@@ -289,7 +288,7 @@ XDG_DATA_HOME="${xdg_data}" MANGOHUD_CONFIGFILE="${mangohud_config}" \
   SHADPS4_PRECISE_READBACK_STATS="${SHADPS4_PRECISE_READBACK_STATS:-${readback_stats}}" \
   SHADPS4_PRECISE_READBACK_STATS_INTERVAL="${SHADPS4_PRECISE_READBACK_STATS_INTERVAL:-${readback_stats_interval}}" \
   SHADPS4_PRECISE_READBACK_WINDOW_KB="${SHADPS4_PRECISE_READBACK_WINDOW_KB:-${readback_window_kb}}" \
-  SHADPS4_SLEEPQ_USE_MUTEX="${SHADPS4_SLEEPQ_USE_MUTEX:-${sleepq_use_mutex}}" \
+  SHADPS4_SLEEPQ_LOCK="${SHADPS4_SLEEPQ_LOCK:-${sleepq_lock}}" \
   "${command[@]}" 2>&1 | tee "${run_dir}/console.log"
 exit_status="${PIPESTATUS[0]}"
 set -e
