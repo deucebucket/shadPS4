@@ -131,6 +131,26 @@ case "${readback_write_site_window}" in
     fi
     ;;
 esac
+readback_scoped_barrier_file="${SECOND_SON_READBACK_SCOPED_BARRIER_FILE:-${data_root}/readback-scoped-barrier.txt}"
+readback_scoped_barrier_source="default"
+if [[ -n "${SECOND_SON_READBACK_SCOPED_BARRIER:-}" ]]; then
+  readback_scoped_barrier="${SECOND_SON_READBACK_SCOPED_BARRIER}"
+  readback_scoped_barrier_source="environment"
+elif [[ -r "${readback_scoped_barrier_file}" ]]; then
+  IFS= read -r readback_scoped_barrier <"${readback_scoped_barrier_file}" || true
+  readback_scoped_barrier="${readback_scoped_barrier:-0}"
+  readback_scoped_barrier_source="${readback_scoped_barrier_file}"
+else
+  readback_scoped_barrier="0"
+fi
+case "${readback_scoped_barrier}" in
+  0|1) ;;
+  *)
+    echo "Ignoring invalid precise-readback scoped-barrier value '${readback_scoped_barrier}'; expected 0 or 1" >&2
+    readback_scoped_barrier="0"
+    readback_scoped_barrier_source="invalid-fallback"
+    ;;
+esac
 gpu_performance_file="${SECOND_SON_GPU_PERFORMANCE_FILE:-${data_root}/gpu-performance-level.txt}"
 gpu_performance_source="default"
 if [[ -n "${SECOND_SON_GPU_PERFORMANCE_LEVEL:-}" ]]; then
@@ -244,6 +264,8 @@ EOF
   echo "precise_readback_window_source=${readback_window_source}"
   echo "precise_readback_write_site_window=${readback_write_site_window}"
   echo "precise_readback_write_site_window_source=${readback_write_site_window_source}"
+  echo "precise_readback_scoped_barrier=${readback_scoped_barrier}"
+  echo "precise_readback_scoped_barrier_source=${readback_scoped_barrier_source}"
   echo "sleepq_stats=${sleepq_stats}"
   echo "sleepq_stats_source=${sleepq_stats_source}"
   echo "sleepq_stats_interval=${sleepq_stats_interval}"
@@ -509,6 +531,7 @@ XDG_DATA_HOME="${xdg_data}" MANGOHUD_CONFIGFILE="${mangohud_config}" \
   SHADPS4_PRECISE_READBACK_STATS_INTERVAL="${SHADPS4_PRECISE_READBACK_STATS_INTERVAL:-${readback_stats_interval}}" \
   SHADPS4_PRECISE_READBACK_WINDOW_KB="${SHADPS4_PRECISE_READBACK_WINDOW_KB:-${readback_window_kb}}" \
   SHADPS4_PRECISE_READBACK_WRITE_SITE_WINDOW="${SHADPS4_PRECISE_READBACK_WRITE_SITE_WINDOW:-${readback_write_site_window}}" \
+  SHADPS4_PRECISE_READBACK_SCOPED_BARRIER="${SHADPS4_PRECISE_READBACK_SCOPED_BARRIER:-${readback_scoped_barrier}}" \
   SHADPS4_SLEEPQ_STATS="${SHADPS4_SLEEPQ_STATS:-${sleepq_stats}}" \
   SHADPS4_SLEEPQ_STATS_INTERVAL="${SHADPS4_SLEEPQ_STATS_INTERVAL:-${sleepq_stats_interval}}" \
   "${command[@]}" 2>&1 | tee "${run_dir}/console.log"

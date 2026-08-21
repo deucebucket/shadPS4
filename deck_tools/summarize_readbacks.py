@@ -34,6 +34,8 @@ INTEGER_FIELDS = {
     "download_calls",
     "copies",
     "downloaded_bytes",
+    "barrier_bytes",
+    "full_barrier_bytes",
     "no_downloads",
     "site_window_kib",
     "site_window_hits",
@@ -80,6 +82,8 @@ def parse_intervals(text: str) -> list[dict[str, object]]:
         fields.setdefault("window_kib", 512)
         fields.setdefault("site_window_kib", 0)
         fields.setdefault("site_window_hits", 0)
+        fields.setdefault("barrier_bytes", 0)
+        fields.setdefault("full_barrier_bytes", 0)
         hot_match = re.search(r"\bhot=\[([^]]*)\]", body)
         fields["hot"] = [
             {"address": address.lower(), "requests": int(requests), "writes": int(writes)}
@@ -160,6 +164,8 @@ def summarize(intervals: list[dict[str, object]], tail_count: int) -> dict[str, 
             "download_calls",
             "copies",
             "downloaded_bytes",
+            "barrier_bytes",
+            "full_barrier_bytes",
             "no_downloads",
             "site_window_hits",
         )
@@ -252,6 +258,11 @@ def summarize(intervals: list[dict[str, object]], tail_count: int) -> dict[str, 
         "downloaded_bytes_per_request": round(totals["downloaded_bytes"] / requests, 3)
         if requests
         else 0.0,
+        "barrier_scope_pct": round(
+            totals["barrier_bytes"] * 100.0 / totals["full_barrier_bytes"], 3
+        )
+        if totals["full_barrier_bytes"]
+        else None,
         "hottest_pages": hottest,
         "hottest_sites": hottest_sites,
         "hottest_contexts": hottest_contexts,
@@ -270,6 +281,11 @@ def render_text(log_path: Path, result: dict[str, object]) -> str:
         ),
         f"requests={result['requests']} writes={result['writes']} reads={result['reads']}",
         f"requested_bytes={result['requested_bytes']} downloaded_bytes={result['downloaded_bytes']}",
+        "barrier_bytes={} full_barrier_bytes={} barrier_scope_pct={}".format(
+            result["barrier_bytes"],
+            result["full_barrier_bytes"],
+            result["barrier_scope_pct"] if result["barrier_scope_pct"] is not None else "n/a",
+        ),
         f"amplification={result['amplification']}x copies_per_request={result['copies_per_request']}",
         "finish_total_ms={} finish_avg_ms_per_request={} finish_max_ms={}".format(
             result["finish_total_ms"],
