@@ -2,11 +2,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <cstdlib>
+#include <mutex>
 #include "common/spin_lock.h"
 #include "core/libraries/kernel/threads/pthread.h"
 #include "core/libraries/kernel/threads/sleepq.h"
 
 namespace Libraries::Kernel {
+
+static bool UseHostMutex() {
+    static const bool use_host_mutex = [] {
+        const char* value = std::getenv("SHADPS4_SLEEPQ_USE_MUTEX");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return use_host_mutex;
+}
 
 static constexpr int HASHSHIFT = 9;
 static constexpr int HASHSIZE = (1 << HASHSHIFT);
@@ -15,7 +25,24 @@ static constexpr int HASHSIZE = (1 << HASHSHIFT);
 #define SC_LOOKUP(wc) &sc_table[SC_HASH(wc)]
 
 struct SleepQueueChain {
-    Common::SpinLock sc_lock;
+    void Lock() {
+        if (UseHostMutex()) {
+            mutex.lock();
+        } else {
+            spin_lock.lock();
+        }
+    }
+
+    void Unlock() {
+        if (UseHostMutex()) {
+            mutex.unlock();
+        } else {
+            spin_lock.unlock();
+        }
+    }
+
+    Common::SpinLock spin_lock;
+    std::mutex mutex;
     SleepqList sc_queues;
     int sc_type;
 };
@@ -27,12 +54,12 @@ void SleepqLock(void* wchan) {
         g_curthread->locklevel.fetch_add(1, std::memory_order_acq_rel);
     }
     SleepQueueChain* sc = SC_LOOKUP(wchan);
-    sc->sc_lock.lock();
+    sc->Lock();
 }
 
 void SleepqUnlock(void* wchan) {
     SleepQueueChain* sc = SC_LOOKUP(wchan);
-    sc->sc_lock.unlock();
+    sc->Unlock();
     if (g_curthread != nullptr) {
         const int previous = g_curthread->locklevel.fetch_sub(1, std::memory_order_acq_rel);
         ASSERT(previous > 0);

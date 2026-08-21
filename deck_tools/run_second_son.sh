@@ -20,6 +20,24 @@ elif [[ -r "${readback_window_file}" ]]; then
 else
   readback_window_kb="512"
 fi
+sleepq_lock_file="${SECOND_SON_SLEEPQ_LOCK_FILE:-${data_root}/sleepq-lock.txt}"
+sleepq_lock="${SECOND_SON_SLEEPQ_LOCK:-}"
+sleepq_lock_source="environment"
+if [[ -z "${sleepq_lock}" && -r "${sleepq_lock_file}" ]]; then
+  IFS= read -r sleepq_lock <"${sleepq_lock_file}" || true
+  sleepq_lock_source="${sleepq_lock_file}"
+elif [[ -z "${sleepq_lock}" ]]; then
+  sleepq_lock="spin"
+  sleepq_lock_source="default"
+fi
+case "${sleepq_lock}" in
+  mutex) sleepq_use_mutex=1 ;;
+  spin) sleepq_use_mutex=0 ;;
+  *)
+    echo "Invalid sleep-queue lock '${sleepq_lock}'; expected spin or mutex" >&2
+    exit 2
+    ;;
+esac
 source "${repo_dir}/deck_tools/deck_runtime.sh"
 deck_runtime_detect
 
@@ -110,6 +128,8 @@ EOF
   echo "precise_readback_stats_interval=${readback_stats_interval}"
   echo "precise_readback_window_kb=${readback_window_kb}"
   echo "precise_readback_window_source=${readback_window_source}"
+  echo "sleepq_lock=${sleepq_lock}"
+  echo "sleepq_lock_source=${sleepq_lock_source}"
   sha256sum "${binary}"
   uname -a
   free -h
@@ -269,6 +289,7 @@ XDG_DATA_HOME="${xdg_data}" MANGOHUD_CONFIGFILE="${mangohud_config}" \
   SHADPS4_PRECISE_READBACK_STATS="${SHADPS4_PRECISE_READBACK_STATS:-${readback_stats}}" \
   SHADPS4_PRECISE_READBACK_STATS_INTERVAL="${SHADPS4_PRECISE_READBACK_STATS_INTERVAL:-${readback_stats_interval}}" \
   SHADPS4_PRECISE_READBACK_WINDOW_KB="${SHADPS4_PRECISE_READBACK_WINDOW_KB:-${readback_window_kb}}" \
+  SHADPS4_SLEEPQ_USE_MUTEX="${SHADPS4_SLEEPQ_USE_MUTEX:-${sleepq_use_mutex}}" \
   "${command[@]}" 2>&1 | tee "${run_dir}/console.log"
 exit_status="${PIPESTATUS[0]}"
 set -e
