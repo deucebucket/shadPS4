@@ -110,6 +110,11 @@ session.
   attempt to replace the buffer cache's separate device-local shadow allocations.
 - Issue 67 tracks behavior-neutral attribution of precise-readback bytes and completion waits to
   cached-buffer identities before another memory-placement candidate is selected.
+- Issue 65 tracks the first disabled-by-default runtime conversion of one measured cached buffer to
+  host-visible memory. It is a foreground correctness/performance gate, not a broad conversion.
+- Issue 69 tracks a one-buffer-at-a-time host-visible test of the byte-dominant cached-buffer size
+  class identified by issue 67. Selection is disabled by default, exact-size and ordinal bounded,
+  and must pass replicated foreground correctness and performance gates.
 
 ## Local code changes
 
@@ -469,6 +474,44 @@ session.
 - The diagnostic passes its behavior-neutral gate. Any follow-up must use the byte census to select
   one bounded allocation at a time and must not treat the observed finish ranking as proof that
   moving that allocation alone removes the wait.
+
+### Selective host-visible cached-buffer runtime prototype
+
+- Issue 65 tested the hottest measured guest address, `0x2edaf8000`, without embedding a game or
+  address in the emulator. An external selector converts only the containing BufferCache
+  allocation to mapped host-visible memory when its size stays below an explicit fail-closed cap;
+  absent, `off`, invalid, or over-cap selections preserve the device-local path.
+- The actual merged allocation was 5,104 KiB. A 512 KiB guard correctly refused it; an 8 MiB test
+  cap selected it. The direct readback path retained GPU-to-host barriers, synchronous completion,
+  non-coherent invalidation, guest-backing writes, tracker transitions, and all other buffers.
+- The standalone probe was strengthened first to use the full cached-buffer usage flags, including
+  shader device address. RADV returned nonzero device addresses for both imported host memory and
+  device-local memory, and the validation-layer benchmark remained clean.
+- Two candidate and two control foreground runs used the exact `4d49c813` binary. The selected path
+  rendered the correctly lit cannery scene with Delsin, kept 48 kHz stereo output and controller
+  input, and exited with status 0. A complete candidate screenshot and reverse-control screenshot
+  preserve the foreground proof.
+- Across final 400 samples, the two-run median FPS average changed from 9.977615 control to
+  9.993290 candidate (+0.157%) and median frame time from 100.224500 to 100.067525 ms (-0.157%).
+  This is measurement noise, not a demonstrated speedup. Final-eight readback finish time worsened
+  from 2,684.837 to 2,761.825 ms (+2.868%).
+- The candidate directly served an average 596,928 bytes in its final eight intervals, only 0.514%
+  of the 116,197,824 reported downloaded-byte average. The synthetic capability win does not
+  transfer because this single game buffer covers too little of the live workload.
+- The runtime selector is rejected as a performance change and restored to `off` with the 512 KiB
+  guard. Broad host-visible conversion is not justified because the compatible Deck memory type is
+  host-cached/coherent but not device-local. The next safe gate is behavior-neutral per-buffer
+  contribution measurement before any multi-buffer candidate is chosen.
+
+### One byte-dominant host-visible buffer
+
+- Issue 69 narrows the rejected issue 65 mechanism to one cached allocation from the exact size
+  class that issue 67 measured as dominant by downloaded bytes. Guest addresses varied between
+  cold runs, so the selector uses an exact allocation size and a 1-based match ordinal instead of
+  pretending one address is a stable identity.
+- The selector is disabled by default, capped at 32 MiB, and may select at most one allocation per
+  process. All other cached buffers remain device-local. Foreground C-A-A-C evidence is required
+  before the mechanism can be accepted; this entry is an implementation scope, not a speed claim.
 
 ## Runtime results
 

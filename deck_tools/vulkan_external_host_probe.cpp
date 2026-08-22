@@ -27,7 +27,8 @@ constexpr VkBufferUsageFlags BufferUsage =
     VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
     VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
 constexpr VkExternalMemoryHandleTypeFlagBits HostHandle =
     VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
 
@@ -141,6 +142,23 @@ int main() {
   vkGetPhysicalDeviceMemoryProperties(gpu, &memory_properties);
   std::cout << "gpu=" << gpu_properties.deviceName << '\n';
 
+  VkPhysicalDeviceBufferDeviceAddressFeatures supported_bda{
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
+  };
+  VkPhysicalDeviceFeatures2 supported_features{
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+      .pNext = &supported_bda,
+  };
+  vkGetPhysicalDeviceFeatures2(gpu, &supported_features);
+  std::cout << "buffer_device_address=" << supported_bda.bufferDeviceAddress
+            << '\n';
+  if (supported_bda.bufferDeviceAddress != VK_TRUE) {
+    std::cerr << "result=fail stage=device_feature"
+                 " reason=no_buffer_device_address\n";
+    vkDestroyInstance(instance, nullptr);
+    return 1;
+  }
+
   const bool extension_available =
       HasDeviceExtension(gpu, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
   std::cout << "extension=" << VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME
@@ -218,8 +236,13 @@ int main() {
   };
   constexpr const char *device_extensions[] = {
       VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME};
+  const VkPhysicalDeviceBufferDeviceAddressFeatures enabled_bda{
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES,
+      .bufferDeviceAddress = VK_TRUE,
+  };
   const VkDeviceCreateInfo device_info{
       .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+      .pNext = &enabled_bda,
       .queueCreateInfoCount = 1,
       .pQueueCreateInfos = &queue_info,
       .enabledExtensionCount = 1,
@@ -332,9 +355,14 @@ int main() {
       .handleType = HostHandle,
       .pHostPointer = host_pointer,
   };
+  const VkMemoryAllocateFlagsInfo imported_address_allocate_info{
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+      .pNext = &import_info,
+      .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
+  };
   const VkMemoryAllocateInfo imported_allocate_info{
       .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-      .pNext = &import_info,
+      .pNext = &imported_address_allocate_info,
       .allocationSize = allocation_size,
       .memoryTypeIndex = imported_memory_type,
   };
@@ -361,6 +389,23 @@ int main() {
   std::cout << "imported_memory_type=" << imported_memory_type
             << " imported_memory_flags=0x" << std::hex << imported_flags
             << std::dec << '\n';
+  const VkBufferDeviceAddressInfo imported_address_info{
+      .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+      .buffer = imported_buffer,
+  };
+  const VkDeviceAddress imported_address =
+      vkGetBufferDeviceAddress(device, &imported_address_info);
+  std::cout << "imported_buffer_device_address=0x" << std::hex
+            << imported_address << std::dec << '\n';
+  if (imported_address == 0) {
+    std::cerr << "result=fail stage=imported_device_address reason=zero\n";
+    vkDestroyBuffer(device, imported_buffer, nullptr);
+    vkFreeMemory(device, imported_memory, nullptr);
+    std::free(host_pointer);
+    vkDestroyDevice(device, nullptr);
+    vkDestroyInstance(instance, nullptr);
+    return 1;
+  }
 
   const VkBufferCreateInfo readback_buffer_info{
       .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -437,8 +482,13 @@ int main() {
   const std::uint32_t device_memory_type =
       FindMemoryType(memory_properties, device_requirements.memoryTypeBits,
                      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+  const VkMemoryAllocateFlagsInfo device_address_allocate_info{
+      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+      .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT,
+  };
   const VkMemoryAllocateInfo device_allocate_info{
       .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+      .pNext = &device_address_allocate_info,
       .allocationSize = device_requirements.size,
       .memoryTypeIndex = device_memory_type,
   };
@@ -477,6 +527,28 @@ int main() {
   std::cout << "device_memory_type=" << device_memory_type
             << " device_memory_flags=0x" << std::hex << device_flags << std::dec
             << '\n';
+  const VkBufferDeviceAddressInfo device_address_info{
+      .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+      .buffer = device_buffer,
+  };
+  const VkDeviceAddress device_address =
+      vkGetBufferDeviceAddress(device, &device_address_info);
+  std::cout << "device_buffer_device_address=0x" << std::hex << device_address
+            << std::dec << '\n';
+  if (device_address == 0) {
+    std::cerr << "result=fail stage=device_local_address reason=zero\n";
+    vkDestroyBuffer(device, device_buffer, nullptr);
+    vkFreeMemory(device, device_memory, nullptr);
+    vkUnmapMemory(device, readback_memory);
+    vkDestroyBuffer(device, readback_buffer, nullptr);
+    vkFreeMemory(device, readback_memory, nullptr);
+    vkDestroyBuffer(device, imported_buffer, nullptr);
+    vkFreeMemory(device, imported_memory, nullptr);
+    std::free(host_pointer);
+    vkDestroyDevice(device, nullptr);
+    vkDestroyInstance(instance, nullptr);
+    return 1;
+  }
 
   const VkCommandPoolCreateInfo pool_info{
       .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,

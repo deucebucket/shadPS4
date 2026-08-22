@@ -16,6 +16,8 @@ namespace VideoCore {
 
 std::string_view BufferTypeName(MemoryUsage type) {
     switch (type) {
+    case MemoryUsage::CachedHost:
+        return "CachedHost";
     case MemoryUsage::Upload:
         return "Upload";
     case MemoryUsage::Download:
@@ -36,6 +38,8 @@ std::string_view BufferTypeName(MemoryUsage type) {
 
 [[nodiscard]] VmaAllocationCreateFlags MemoryUsageVmaFlags(MemoryUsage usage) {
     switch (usage) {
+    case MemoryUsage::CachedHost:
+        return VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
     case MemoryUsage::Upload:
     case MemoryUsage::Stream:
         return VMA_ALLOCATION_CREATE_MAPPED_BIT |
@@ -53,6 +57,7 @@ std::string_view BufferTypeName(MemoryUsage type) {
     case MemoryUsage::DeviceLocal:
     case MemoryUsage::Stream:
         return VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+    case MemoryUsage::CachedHost:
     case MemoryUsage::Upload:
     case MemoryUsage::Download:
         return VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
