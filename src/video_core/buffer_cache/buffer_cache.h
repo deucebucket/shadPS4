@@ -332,10 +332,12 @@ private:
     u64 precise_readback_max_finish_nanoseconds{};
     u64 precise_readback_write_site_window_hits{};
     u64 precise_readback_buffer_table_drops{};
-    u64 host_visible_buffer_size{};
+    u64 host_visible_buffer_min_size{};
+    u64 host_visible_buffer_max_size{};
     u32 host_visible_buffer_ordinal{};
     u32 host_visible_buffer_matches{};
     VAddr host_visible_buffer_selected_address{};
+    u64 host_visible_buffer_selected_size{};
     bool host_visible_buffer_selected{};
     WriteDiscardCoverageSample precise_readback_write_discard_coverage{};
     std::array<ReadbackHotPage, ReadbackStatsHotPageCount> precise_readback_hot_pages{};

@@ -115,20 +115,29 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         }
     }
     if (const char* selector = std::getenv("SHADPS4_HOST_VISIBLE_BUFFER_SELECTOR")) {
-        char* separator = nullptr;
-        const auto parsed_size = std::strtoull(selector, &separator, 10);
+        char* size_end = nullptr;
+        const auto parsed_min_size = std::strtoull(selector, &size_end, 10);
+        auto parsed_max_size = parsed_min_size;
+        char* ordinal_separator = size_end;
+        if (size_end != nullptr && *size_end == '-') {
+            parsed_max_size = std::strtoull(size_end + 1, &ordinal_separator, 10);
+        }
         char* end = nullptr;
-        const auto parsed_ordinal =
-            separator != nullptr && *separator == ':' ? std::strtoull(separator + 1, &end, 10) : 0;
-        if (separator != selector && *separator == ':' && end != separator + 1 && *end == '\0' &&
-            parsed_size >= 64 && parsed_size <= 32'768 && parsed_ordinal >= 1 &&
-            parsed_ordinal <= 64) {
-            host_visible_buffer_size = parsed_size * 1_KB;
+        const auto parsed_ordinal = ordinal_separator != nullptr && *ordinal_separator == ':'
+                                        ? std::strtoull(ordinal_separator + 1, &end, 10)
+                                        : 0;
+        if (size_end != selector && ordinal_separator != size_end + 1 &&
+            *ordinal_separator == ':' && end != ordinal_separator + 1 && *end == '\0' &&
+            parsed_min_size >= 64 && parsed_min_size <= parsed_max_size &&
+            parsed_max_size <= 32'768 && parsed_ordinal >= 1 && parsed_ordinal <= 64) {
+            host_visible_buffer_min_size = parsed_min_size * 1_KB;
+            host_visible_buffer_max_size = parsed_max_size * 1_KB;
             host_visible_buffer_ordinal = static_cast<u32>(parsed_ordinal);
         } else if (selector[0] != '\0' && std::string_view{selector} != "off") {
             LOG_WARNING(Render_Vulkan,
                         "Ignoring invalid host-visible buffer selector '{}'; expected off or "
-                        "<size-kib>:<ordinal> with size 64 through 32768 and ordinal 1 through 64",
+                        "<size-kib>:<ordinal> or <min-kib>-<max-kib>:<ordinal>, with sizes 64 "
+                        "through 32768 and ordinal 1 through 64",
                         selector);
         }
     }
@@ -151,11 +160,12 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                  "Behavior-neutral write-discard coverage probe enabled for guest PC {:#x}",
                  precise_readback_write_discard_probe_pc);
     }
-    if (host_visible_buffer_size != 0) {
+    if (host_visible_buffer_min_size != 0) {
         LOG_INFO(Render_Vulkan,
-                 "Host-visible cached-buffer selector enabled for exact size {} KiB, match "
-                 "ordinal {}, hard maximum 32768 KiB",
-                 host_visible_buffer_size / 1_KB, host_visible_buffer_ordinal);
+                 "Host-visible cached-buffer selector enabled for size range {}-{} KiB, match "
+                 "ordinal {}, hard maximum 32768 KiB and one selection per process",
+                 host_visible_buffer_min_size / 1_KB, host_visible_buffer_max_size / 1_KB,
+                 host_visible_buffer_ordinal);
     }
 
     // Set up garbage collection parameters
@@ -180,13 +190,14 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
 }
 
 BufferCache::~BufferCache() {
-    if (host_visible_buffer_size != 0) {
+    if (host_visible_buffer_min_size != 0) {
         LOG_INFO(Render_Vulkan,
-                 "Host-visible cached-buffer selector summary: size_kib={} ordinal={} matches={} "
-                 "selected={} selected_address={:#x}",
-                 host_visible_buffer_size / 1_KB, host_visible_buffer_ordinal,
-                 host_visible_buffer_matches, host_visible_buffer_selected,
-                 host_visible_buffer_selected_address);
+                 "Host-visible cached-buffer selector summary: min_size_kib={} max_size_kib={} "
+                 "ordinal={} matches={} selected={} selected_address={:#x} selected_size_kib={}",
+                 host_visible_buffer_min_size / 1_KB, host_visible_buffer_max_size / 1_KB,
+                 host_visible_buffer_ordinal, host_visible_buffer_matches,
+                 host_visible_buffer_selected, host_visible_buffer_selected_address,
+                 host_visible_buffer_selected_size / 1_KB);
     }
 }
 
@@ -1262,8 +1273,9 @@ BufferId BufferCache::CreateBuffer(VAddr device_addr, u32 wanted_size) {
     wanted_size = static_cast<u32>(device_addr_end - device_addr);
     const OverlapResult overlap = ResolveOverlaps(device_addr, wanted_size);
     const u32 size = static_cast<u32>(overlap.end - overlap.begin);
-    const bool matches_host_visible_size =
-        host_visible_buffer_size != 0 && size == host_visible_buffer_size;
+    const bool matches_host_visible_size = host_visible_buffer_min_size != 0 &&
+                                           size >= host_visible_buffer_min_size &&
+                                           size <= host_visible_buffer_max_size;
     bool use_host_visible = false;
     if (matches_host_visible_size) {
         host_visible_buffer_matches++;
@@ -1272,11 +1284,13 @@ BufferId BufferCache::CreateBuffer(VAddr device_addr, u32 wanted_size) {
         if (use_host_visible) {
             host_visible_buffer_selected = true;
             host_visible_buffer_selected_address = overlap.begin;
+            host_visible_buffer_selected_size = size;
         }
         LOG_INFO(Render_Vulkan,
-                 "Host-visible cached-buffer exact-size match {}: [{:#x}, {:#x}) size_kib={} "
-                 "requested_ordinal={} selected={}",
+                 "Host-visible cached-buffer size-range match {}: [{:#x}, {:#x}) size_kib={} "
+                 "range_kib={}-{} requested_ordinal={} selected={}",
                  host_visible_buffer_matches, overlap.begin, overlap.end, size / 1_KB,
+                 host_visible_buffer_min_size / 1_KB, host_visible_buffer_max_size / 1_KB,
                  host_visible_buffer_ordinal, use_host_visible);
     }
     const BufferId new_buffer_id = slot_buffers.insert(

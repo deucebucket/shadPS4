@@ -174,9 +174,14 @@ case "${host_visible_buffer_selector}" in
        (( 10#${BASH_REMATCH[1]} >= 64 && 10#${BASH_REMATCH[1]} <= 32768 &&
           10#${BASH_REMATCH[2]} <= 64 )); then
       host_visible_buffer_selector_valid=1
+    elif [[ "${host_visible_buffer_selector}" =~ ^([0-9]{2,5})-([0-9]{2,5}):([1-9][0-9]?)$ ]] &&
+         (( 10#${BASH_REMATCH[1]} >= 64 &&
+            10#${BASH_REMATCH[1]} <= 10#${BASH_REMATCH[2]} &&
+            10#${BASH_REMATCH[2]} <= 32768 && 10#${BASH_REMATCH[3]} <= 64 )); then
+      host_visible_buffer_selector_valid=1
     fi
     if [[ "${host_visible_buffer_selector_valid}" != "1" ]]; then
-      echo "Ignoring invalid host-visible buffer selector '${host_visible_buffer_selector}'; expected off or <size-kib>:<ordinal> with size 64 through 32768 and ordinal 1 through 64" >&2
+      echo "Ignoring invalid host-visible buffer selector '${host_visible_buffer_selector}'; expected off, <size-kib>:<ordinal>, or <min-kib>-<max-kib>:<ordinal> with sizes 64 through 32768 and ordinal 1 through 64" >&2
       host_visible_buffer_selector="off"
       host_visible_buffer_selector_source="invalid-fallback"
     fi

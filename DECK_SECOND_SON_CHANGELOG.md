@@ -113,8 +113,10 @@ session.
 - Issue 65 tracks the first disabled-by-default runtime conversion of one measured cached buffer to
   host-visible memory. It is a foreground correctness/performance gate, not a broad conversion.
 - Issue 69 tracks a one-buffer-at-a-time host-visible test of the byte-dominant cached-buffer size
-  class identified by issue 67. Selection is disabled by default, exact-size and ordinal bounded,
-  and must pass replicated foreground correctness and performance gates.
+  class identified by issue 67. A foreground cold run proved that exact allocation sizes drift by
+  tens of KiB, so selection now accepts either an exact size or a bounded size range plus ordinal.
+  It remains disabled by default, capped at 32 MiB, selects at most one allocation per process, and
+  must pass replicated foreground correctness and performance gates.
 
 ## Local code changes
 
