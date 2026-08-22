@@ -8,8 +8,8 @@ import summarize_readbacks
 class SummarizeReadbacksTest(unittest.TestCase):
     def test_weighted_totals_and_hot_pages(self):
         text = """
-[Render.Vulkan] <Info> Precise readback stats: window_kib=64 requests=2 writes=1 reads=1 bounded_repeats=1 tracked_pages=2 requested_bytes=16 download_calls=2 copies=6 downloaded_bytes=4096 no_downloads=0 finish_total_ms=3.000 finish_avg_ms=1.500 finish_max_ms=2.000 wall_ms=20.000 request_rate=100.0 finish_share_pct=15.0 site_window_kib=16 site_window_hits=1 amplification=256.0x hot=[0x1000:2(w1), 0x2000:1(w0), 0x0:0(w0)] hot_sites=[0xaaa@0x1000:2(w1), 0x0@0x0:0(w0), 0x0@0x0:0(w0)] top_context=[0xaaa@0x1000:2(w1);rax:0x10;rcx:0x20;rdx:0x40;rsi:0x2000;rdi:0x1000;rbp:0x3000;rsp:0x2ff0;rcx_range:0x18-0x20;rdx_range:0x40-0x40]
-[Render.Vulkan] <Info> Precise readback stats: window_kib=64 requests=2 writes=0 reads=2 bounded_repeats=2 tracked_pages=1 requested_bytes=16 download_calls=1 copies=2 downloaded_bytes=2048 no_downloads=1 finish_total_ms=1.000 finish_avg_ms=0.500 finish_max_ms=1.000 wall_ms=20.000 request_rate=100.0 finish_share_pct=5.0 site_window_kib=16 site_window_hits=0 amplification=128.0x hot=[0x1000:2(w0), 0x0:0(w0), 0x0:0(w0)] hot_sites=[0xaaa@0x1000:1(w0), 0xbbb@0x1000:1(w0), 0x0@0x0:0(w0)] top_context=[0xaaa@0x1000:1(w0);rax:0x10;rcx:0x10;rdx:0x80;rsi:0x2100;rdi:0x1100;rbp:0x3000;rsp:0x2ff0;rcx_range:0x10-0x10;rdx_range:0x80-0x80]
+[Render.Vulkan] <Info> Precise readback stats: window_kib=64 requests=2 writes=1 reads=1 bounded_repeats=1 tracked_pages=2 requested_bytes=16 download_calls=2 copies=6 downloaded_bytes=4096 barrier_span_bytes=1024 barrier_buffer_bytes=131072 no_downloads=0 finish_total_ms=3.000 finish_avg_ms=1.500 finish_max_ms=2.000 wall_ms=20.000 request_rate=100.0 finish_share_pct=15.0 site_window_kib=16 site_window_hits=1 amplification=256.0x hot=[0x1000:2(w1), 0x2000:1(w0), 0x0:0(w0)] hot_sites=[0xaaa@0x1000:2(w1), 0x0@0x0:0(w0), 0x0@0x0:0(w0)] top_context=[0xaaa@0x1000:2(w1);rax:0x10;rcx:0x20;rdx:0x40;rsi:0x2000;rdi:0x1000;rbp:0x3000;rsp:0x2ff0;rcx_range:0x18-0x20;rdx_range:0x40-0x40]
+[Render.Vulkan] <Info> Precise readback stats: window_kib=64 requests=2 writes=0 reads=2 bounded_repeats=2 tracked_pages=1 requested_bytes=16 download_calls=1 copies=2 downloaded_bytes=2048 barrier_span_bytes=512 barrier_buffer_bytes=65536 no_downloads=1 finish_total_ms=1.000 finish_avg_ms=0.500 finish_max_ms=1.000 wall_ms=20.000 request_rate=100.0 finish_share_pct=5.0 site_window_kib=16 site_window_hits=0 amplification=128.0x hot=[0x1000:2(w0), 0x0:0(w0), 0x0:0(w0)] hot_sites=[0xaaa@0x1000:1(w0), 0xbbb@0x1000:1(w0), 0x0@0x0:0(w0)] top_context=[0xaaa@0x1000:1(w0);rax:0x10;rcx:0x10;rdx:0x80;rsi:0x2100;rdi:0x1100;rbp:0x3000;rsp:0x2ff0;rcx_range:0x10-0x10;rdx_range:0x80-0x80]
 """
         text = text.replace(
             "amplification=256.0x",
@@ -41,6 +41,9 @@ class SummarizeReadbacksTest(unittest.TestCase):
         self.assertEqual(result["requests"], 4)
         self.assertEqual(result["downloaded_bytes"], 6144)
         self.assertEqual(result["amplification"], 192.0)
+        self.assertEqual(result["barrier_span_bytes"], 1536)
+        self.assertEqual(result["barrier_buffer_bytes"], 196608)
+        self.assertEqual(result["barrier_coverage_pct"], 0.781)
         self.assertEqual(result["finish_avg_ms_per_request"], 1.0)
         self.assertEqual(result["request_rate"], 100.0)
         self.assertEqual(result["finish_share_pct"], 10.0)
@@ -84,6 +87,8 @@ class SummarizeReadbacksTest(unittest.TestCase):
         self.assertEqual(intervals[0]["discard_full_requests"], 0)
         self.assertEqual(intervals[0]["tracked_buffers"], 0)
         self.assertEqual(intervals[0]["buffer_table_drops"], 0)
+        self.assertEqual(intervals[0]["barrier_span_bytes"], 0)
+        self.assertEqual(intervals[0]["barrier_buffer_bytes"], 0)
         self.assertEqual(intervals[0]["hot_buffers"], [])
         self.assertEqual(intervals[0]["slow_buffers"], [])
 

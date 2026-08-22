@@ -59,6 +59,16 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     const char* readback_stats = std::getenv("SHADPS4_PRECISE_READBACK_STATS");
     precise_readback_stats_enabled =
         readback_stats != nullptr && readback_stats[0] != '\0' && readback_stats[0] != '0';
+    if (const char* range_barrier = std::getenv("SHADPS4_PRECISE_READBACK_RANGE_BARRIER")) {
+        const std::string_view value{range_barrier};
+        precise_readback_range_barrier = value == "1";
+        if (!value.empty() && value != "0" && value != "1") {
+            LOG_WARNING(Render_Vulkan,
+                        "Ignoring invalid precise readback range-barrier value '{}'; expected 0 "
+                        "or 1",
+                        value);
+        }
+    }
     if (const char* interval = std::getenv("SHADPS4_PRECISE_READBACK_STATS_INTERVAL")) {
         char* end = nullptr;
         const auto parsed = std::strtoull(interval, &end, 10);
@@ -132,6 +142,10 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         LOG_INFO(Render_Vulkan,
                  "Behavior-neutral write-discard coverage probe enabled for guest PC {:#x}",
                  precise_readback_write_discard_probe_pc);
+    }
+    if (precise_readback_range_barrier) {
+        LOG_INFO(Render_Vulkan,
+                 "Precise readback transfer barriers limited to the copied source span");
     }
 
     // Set up garbage collection parameters
@@ -285,6 +299,8 @@ void BufferCache::RecordPreciseReadbackStats(VAddr device_addr, u64 size, bool i
     precise_readback_download_calls += sample.call_count;
     precise_readback_copy_count += sample.copy_count;
     precise_readback_downloaded_bytes += sample.bytes;
+    precise_readback_barrier_span_bytes += sample.barrier_span_bytes;
+    precise_readback_barrier_buffer_bytes += sample.barrier_buffer_bytes;
     precise_readback_no_downloads += sample.bytes == 0;
     precise_readback_finish_nanoseconds += sample.finish_nanoseconds;
     precise_readback_submit_nanoseconds += sample.submit_nanoseconds;
@@ -543,7 +559,8 @@ void BufferCache::LogPreciseReadbackStats() {
         "Precise readback stats: window_kib={} requests={} writes={} reads={} "
         "bounded_repeats={} "
         "tracked_pages={} requested_bytes={} download_calls={} copies={} downloaded_bytes={} "
-        "no_downloads={} finish_total_ms={:.3f} finish_avg_ms={:.3f} finish_max_ms={:.3f} "
+        "barrier_span_bytes={} barrier_buffer_bytes={} no_downloads={} finish_total_ms={:.3f} "
+        "finish_avg_ms={:.3f} finish_max_ms={:.3f} "
         "submit_total_ms={:.3f} wait_total_ms={:.3f} submit_share_pct={:.1f} "
         "wait_share_pct={:.1f} queued_requests={} avg_outstanding_depth={:.2f} "
         "max_outstanding_depth={} wall_ms={:.3f} request_rate={:.1f} "
@@ -568,6 +585,7 @@ void BufferCache::LogPreciseReadbackStats() {
         precise_readback_requests - precise_readback_writes, precise_readback_bounded_repeats,
         tracked_pages, precise_readback_requested_bytes, precise_readback_download_calls,
         precise_readback_copy_count, precise_readback_downloaded_bytes,
+        precise_readback_barrier_span_bytes, precise_readback_barrier_buffer_bytes,
         precise_readback_no_downloads, finish_total_ms, finish_average_ms, finish_max_ms,
         submit_total_ms, wait_total_ms, submit_share, wait_share, precise_readback_queued_requests,
         average_outstanding_depth, precise_readback_max_outstanding_depth, wall_ms,
@@ -628,6 +646,8 @@ void BufferCache::LogPreciseReadbackStats() {
     precise_readback_download_calls = 0;
     precise_readback_copy_count = 0;
     precise_readback_downloaded_bytes = 0;
+    precise_readback_barrier_span_bytes = 0;
+    precise_readback_barrier_buffer_bytes = 0;
     precise_readback_no_downloads = 0;
     precise_readback_finish_nanoseconds = 0;
     precise_readback_submit_nanoseconds = 0;
@@ -679,6 +699,15 @@ BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& bu
     sample.bytes = total_size_bytes;
     sample.call_count = 1;
     sample.copy_count = copies.size();
+    u64 barrier_begin = std::numeric_limits<u64>::max();
+    u64 barrier_end = 0;
+    for (const auto& copy : copies) {
+        barrier_begin = std::min(barrier_begin, copy.srcOffset);
+        barrier_end = std::max(barrier_end, copy.srcOffset + copy.size);
+    }
+    ASSERT(barrier_begin < barrier_end && barrier_end <= buffer.SizeBytes());
+    sample.barrier_span_bytes = barrier_end - barrier_begin;
+    sample.barrier_buffer_bytes = buffer.SizeBytes();
     const auto [download, offset] = download_buffer.Map(total_size_bytes);
     ASSERT_MSG(download != nullptr, "Buffer download of {} bytes exceeds the {} byte readback ring",
                total_size_bytes, DownloadBufferSize);
@@ -696,8 +725,8 @@ BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& bu
         .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
         .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
         .buffer = buffer.buffer,
-        .offset = 0,
-        .size = buffer.SizeBytes(),
+        .offset = precise_readback_range_barrier ? barrier_begin : 0,
+        .size = precise_readback_range_barrier ? barrier_end - barrier_begin : buffer.SizeBytes(),
     };
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
         .dependencyFlags = vk::DependencyFlagBits::eByRegion,

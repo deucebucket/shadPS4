@@ -165,6 +165,8 @@ private:
         u64 bytes{};
         u64 call_count{};
         u64 copy_count{};
+        u64 barrier_span_bytes{};
+        u64 barrier_buffer_bytes{};
         u64 finish_nanoseconds{};
         u64 submit_nanoseconds{};
         u64 wait_nanoseconds{};
@@ -303,6 +305,7 @@ private:
     };
 
     bool precise_readback_stats_enabled{};
+    bool precise_readback_range_barrier{};
     u64 precise_readback_stats_interval{128};
     u64 precise_readback_window_size{512_KB};
     VAddr precise_readback_write_site_pc{};
@@ -321,6 +324,8 @@ private:
     u64 precise_readback_download_calls{};
     u64 precise_readback_copy_count{};
     u64 precise_readback_downloaded_bytes{};
+    u64 precise_readback_barrier_span_bytes{};
+    u64 precise_readback_barrier_buffer_bytes{};
     u64 precise_readback_no_downloads{};
     u64 precise_readback_finish_nanoseconds{};
     u64 precise_readback_submit_nanoseconds{};

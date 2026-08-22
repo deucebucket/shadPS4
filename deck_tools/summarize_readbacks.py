@@ -39,6 +39,8 @@ INTEGER_FIELDS = {
     "download_calls",
     "copies",
     "downloaded_bytes",
+    "barrier_span_bytes",
+    "barrier_buffer_bytes",
     "no_downloads",
     "site_window_kib",
     "site_window_hits",
@@ -106,6 +108,8 @@ def parse_intervals(text: str) -> list[dict[str, object]]:
             "discard_zero_dirty_requests",
             "tracked_buffers",
             "buffer_table_drops",
+            "barrier_span_bytes",
+            "barrier_buffer_bytes",
         ):
             fields.setdefault(name, 0)
         for field_name in ("hot_buffers", "slow_buffers"):
@@ -215,6 +219,8 @@ def summarize(intervals: list[dict[str, object]], tail_count: int) -> dict[str, 
             "download_calls",
             "copies",
             "downloaded_bytes",
+            "barrier_span_bytes",
+            "barrier_buffer_bytes",
             "no_downloads",
             "site_window_hits",
             "discard_probe_hits",
@@ -360,6 +366,11 @@ def summarize(intervals: list[dict[str, object]], tail_count: int) -> dict[str, 
         if requested_bytes
         else 0.0,
         "copies_per_request": round(totals["copies"] / requests, 3) if requests else 0.0,
+        "barrier_coverage_pct": round(
+            totals["barrier_span_bytes"] * 100.0 / totals["barrier_buffer_bytes"], 3
+        )
+        if totals["barrier_buffer_bytes"]
+        else 0.0,
         "discard_valid_pct": round(
             totals["discard_probe_valid"] * 100.0 / totals["discard_probe_hits"], 3
         )
@@ -419,6 +430,11 @@ def render_text(log_path: Path, result: dict[str, object]) -> str:
         ),
         f"requests={result['requests']} writes={result['writes']} reads={result['reads']}",
         f"requested_bytes={result['requested_bytes']} downloaded_bytes={result['downloaded_bytes']}",
+        "barrier_span_bytes={} barrier_buffer_bytes={} barrier_coverage_pct={}".format(
+            result["barrier_span_bytes"],
+            result["barrier_buffer_bytes"],
+            result["barrier_coverage_pct"],
+        ),
         f"amplification={result['amplification']}x copies_per_request={result['copies_per_request']}",
         "finish_total_ms={} finish_avg_ms_per_request={} finish_max_ms={}".format(
             result["finish_total_ms"],

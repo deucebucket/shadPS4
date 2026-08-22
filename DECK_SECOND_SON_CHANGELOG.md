@@ -470,6 +470,22 @@ session.
   one bounded allocation at a time and must not treat the observed finish ranking as proof that
   moving that allocation alone removes the wait.
 
+### Copied-range precise-readback barrier experiment
+
+- Issue 71 tests an opt-in Vulkan synchronization change inside the existing precise-readback
+  download path. The accepted default still barriers the complete cached buffer; the candidate is
+  enabled only by `SHADPS4_PRECISE_READBACK_RANGE_BARRIER=1` or the validated Deck profile file.
+- Every download already carries the exact source ranges that will be transfer-read. The candidate
+  finds the lowest copied source offset and highest copied end, then uses that one contiguous span
+  for the existing buffer memory barrier. It does not add one barrier per copy, skip a copy, remove
+  `Finish`, alter dirty tracking, or change CPU writeback.
+- Readback diagnostics report the summed copied-span bytes and complete-buffer bytes in both modes,
+  and the local summarizer reports their percentage. This makes the synchronization-scope reduction
+  measurable without pretending that it proves a frame-rate improvement.
+- The selector is disabled by default and invalid launcher or emulator values fail closed. Promotion
+  requires foreground Steam/Gamescope proof of correct lighting, geometry, input, audio, clean exit,
+  and a repeatable frame-time improvement against the exact same binary and scene.
+
 ## Runtime results
 
 - The legally dumped CUSA00223 package installs and launches from Steam Gaming Mode into foreground
