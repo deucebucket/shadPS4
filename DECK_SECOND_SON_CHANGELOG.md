@@ -485,6 +485,21 @@ session.
 - The selector is disabled by default and invalid launcher or emulator values fail closed. Promotion
   requires foreground Steam/Gamescope proof of correct lighting, geometry, input, audio, clean exit,
   and a repeatable frame-time improvement against the exact same binary and scene.
+- Six controlled foreground runs used the exact `ebfd1be5` implementation binary in a primary
+  control-candidate-candidate-control sequence plus a separately cooled candidate-control reverse
+  pair. Every run rendered the correctly lit cannery scene with Delsin and the objective/tutorial,
+  registered the controller, opened the guest 48 kHz stream through the stereo host path, and
+  exited with status 0.
+- The new diagnostics prove that copied spans represented only 0.420% to 0.581% of the complete
+  cached-buffer barrier scope in the final eight intervals. That large nominal scope reduction did
+  not produce a repeatable performance gain: pair one was neutral, while the cooled reverse pair
+  changed median FPS by -0.109% and worsened p95 frame time by 22.846%.
+- The middle pair's apparent +13.130% median FPS was rejected because its control was the
+  end-of-sequence thermal/order outlier and had a substantially different read/write and copy mix.
+  Internal `Finish` timing also cannot assign earlier queued GPU work causally to this barrier.
+- Issue 71 therefore fails the acceptance gate. The opt-in remains off, draft PR 72 is closed
+  unmerged, and the complete-buffer accepted default is preserved. The experiment remains useful
+  negative evidence that nominal barrier byte coverage is not the demonstrated readback bottleneck.
 
 ## Runtime results
 
