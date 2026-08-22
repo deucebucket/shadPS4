@@ -193,11 +193,13 @@ BufferCache::~BufferCache() {
     if (host_visible_buffer_min_size != 0) {
         LOG_INFO(Render_Vulkan,
                  "Host-visible cached-buffer selector summary: min_size_kib={} max_size_kib={} "
-                 "ordinal={} matches={} selected={} selected_address={:#x} selected_size_kib={}",
+                 "ordinal={} matches={} selected={} selected_address={:#x} selected_size_kib={} "
+                 "lineage_replacements={}",
                  host_visible_buffer_min_size / 1_KB, host_visible_buffer_max_size / 1_KB,
                  host_visible_buffer_ordinal, host_visible_buffer_matches,
                  host_visible_buffer_selected, host_visible_buffer_selected_address,
-                 host_visible_buffer_selected_size / 1_KB);
+                 host_visible_buffer_selected_size / 1_KB,
+                 host_visible_buffer_lineage_replacements);
     }
 }
 
@@ -1276,12 +1278,29 @@ BufferId BufferCache::CreateBuffer(VAddr device_addr, u32 wanted_size) {
     const bool matches_host_visible_size = host_visible_buffer_min_size != 0 &&
                                            size >= host_visible_buffer_min_size &&
                                            size <= host_visible_buffer_max_size;
-    bool use_host_visible = false;
+    const bool continues_host_visible_lineage =
+        host_visible_buffer_selected && overlap.begin <= host_visible_buffer_selected_address &&
+        overlap.end > host_visible_buffer_selected_address;
+    bool use_host_visible = continues_host_visible_lineage && size <= 32_MB;
+    if (use_host_visible) {
+        host_visible_buffer_lineage_replacements++;
+        LOG_INFO(Render_Vulkan,
+                 "Host-visible cached-buffer lineage replacement {}: [{:#x}, {:#x}) "
+                 "size_kib={} anchor_address={:#x}",
+                 host_visible_buffer_lineage_replacements, overlap.begin, overlap.end, size / 1_KB,
+                 host_visible_buffer_selected_address);
+    } else if (continues_host_visible_lineage) {
+        LOG_WARNING(Render_Vulkan,
+                    "Refusing host-visible cached-buffer lineage replacement [{:#x}, {:#x}) "
+                    "because size_kib={} exceeds the 32768 KiB hard maximum",
+                    overlap.begin, overlap.end, size / 1_KB);
+    }
     if (matches_host_visible_size) {
         host_visible_buffer_matches++;
-        use_host_visible = !host_visible_buffer_selected &&
-                           host_visible_buffer_matches == host_visible_buffer_ordinal;
-        if (use_host_visible) {
+        const bool selects_new_lineage = !host_visible_buffer_selected &&
+                                         host_visible_buffer_matches == host_visible_buffer_ordinal;
+        use_host_visible = use_host_visible || selects_new_lineage;
+        if (selects_new_lineage) {
             host_visible_buffer_selected = true;
             host_visible_buffer_selected_address = overlap.begin;
             host_visible_buffer_selected_size = size;
@@ -1291,7 +1310,7 @@ BufferId BufferCache::CreateBuffer(VAddr device_addr, u32 wanted_size) {
                  "range_kib={}-{} requested_ordinal={} selected={}",
                  host_visible_buffer_matches, overlap.begin, overlap.end, size / 1_KB,
                  host_visible_buffer_min_size / 1_KB, host_visible_buffer_max_size / 1_KB,
-                 host_visible_buffer_ordinal, use_host_visible);
+                 host_visible_buffer_ordinal, selects_new_lineage);
     }
     const BufferId new_buffer_id = slot_buffers.insert(
         instance, scheduler, use_host_visible ? MemoryUsage::CachedHost : MemoryUsage::DeviceLocal,

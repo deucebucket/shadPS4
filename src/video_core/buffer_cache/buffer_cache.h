@@ -336,6 +336,7 @@ private:
     u64 host_visible_buffer_max_size{};
     u32 host_visible_buffer_ordinal{};
     u32 host_visible_buffer_matches{};
+    u32 host_visible_buffer_lineage_replacements{};
     VAddr host_visible_buffer_selected_address{};
     u64 host_visible_buffer_selected_size{};
     bool host_visible_buffer_selected{};

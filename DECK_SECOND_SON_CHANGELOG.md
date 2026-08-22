@@ -115,8 +115,10 @@ session.
 - Issue 69 tracks a one-buffer-at-a-time host-visible test of the byte-dominant cached-buffer size
   class identified by issue 67. A foreground cold run proved that exact allocation sizes drift by
   tens of KiB, so selection now accepts either an exact size or a bounded size range plus ordinal.
-  It remains disabled by default, capped at 32 MiB, selects at most one allocation per process, and
-  must pass replicated foreground correctness and performance gates.
+  A second rejected run proved that the cache replaces a growing buffer object at the same guest
+  address, so bounded replacements that contain the selected address stay in the one selected
+  lineage. It remains disabled by default, capped at 32 MiB, never selects a second guest-address
+  lineage, and must pass replicated foreground correctness and performance gates.
 
 ## Local code changes
 
