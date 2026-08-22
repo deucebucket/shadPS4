@@ -220,6 +220,8 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write,
             request_sample.bytes += sample.bytes;
             request_sample.call_count += sample.call_count;
             request_sample.copy_count += sample.copy_count;
+            request_sample.barrier_span_bytes += sample.barrier_span_bytes;
+            request_sample.barrier_buffer_bytes += sample.barrier_buffer_bytes;
             request_sample.finish_nanoseconds += sample.finish_nanoseconds;
             request_sample.submit_nanoseconds += sample.submit_nanoseconds;
             request_sample.wait_nanoseconds += sample.wait_nanoseconds;
