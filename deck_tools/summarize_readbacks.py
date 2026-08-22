@@ -34,6 +34,8 @@ INTEGER_FIELDS = {
     "download_calls",
     "copies",
     "downloaded_bytes",
+    "direct_host_calls",
+    "direct_host_bytes",
     "no_downloads",
     "site_window_kib",
     "site_window_hits",
@@ -89,6 +91,8 @@ def parse_intervals(text: str) -> list[dict[str, object]]:
         fields.setdefault("site_window_kib", 0)
         fields.setdefault("site_window_hits", 0)
         for name in (
+            "direct_host_calls",
+            "direct_host_bytes",
             "discard_probe_hits",
             "discard_probe_valid",
             "discard_write_span_bytes",
@@ -179,6 +183,8 @@ def summarize(intervals: list[dict[str, object]], tail_count: int) -> dict[str, 
             "download_calls",
             "copies",
             "downloaded_bytes",
+            "direct_host_calls",
+            "direct_host_bytes",
             "no_downloads",
             "site_window_hits",
             "discard_probe_hits",
@@ -333,6 +339,9 @@ def render_text(log_path: Path, result: dict[str, object]) -> str:
         ),
         f"requests={result['requests']} writes={result['writes']} reads={result['reads']}",
         f"requested_bytes={result['requested_bytes']} downloaded_bytes={result['downloaded_bytes']}",
+        "direct_host_calls={} direct_host_bytes={}".format(
+            result["direct_host_calls"], result["direct_host_bytes"]
+        ),
         f"amplification={result['amplification']}x copies_per_request={result['copies_per_request']}",
         "finish_total_ms={} finish_avg_ms_per_request={} finish_max_ms={}".format(
             result["finish_total_ms"],

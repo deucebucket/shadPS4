@@ -165,6 +165,8 @@ private:
         u64 bytes{};
         u64 call_count{};
         u64 copy_count{};
+        u64 direct_host_calls{};
+        u64 direct_host_bytes{};
         u64 finish_nanoseconds{};
         u64 submit_nanoseconds{};
         u64 wait_nanoseconds{};
@@ -303,12 +305,16 @@ private:
     u64 precise_readback_download_calls{};
     u64 precise_readback_copy_count{};
     u64 precise_readback_downloaded_bytes{};
+    u64 precise_readback_direct_host_calls{};
+    u64 precise_readback_direct_host_bytes{};
     u64 precise_readback_no_downloads{};
     u64 precise_readback_finish_nanoseconds{};
     u64 precise_readback_submit_nanoseconds{};
     u64 precise_readback_wait_nanoseconds{};
     u64 precise_readback_max_finish_nanoseconds{};
     u64 precise_readback_write_site_window_hits{};
+    VAddr host_visible_buffer_address{};
+    u64 host_visible_buffer_max_size{512_KB};
     WriteDiscardCoverageSample precise_readback_write_discard_coverage{};
     std::array<ReadbackHotPage, ReadbackStatsHotPageCount> precise_readback_hot_pages{};
     std::array<ReadbackHotFaultSite, ReadbackStatsHotPageCount> precise_readback_hot_fault_sites{};

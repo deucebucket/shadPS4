@@ -22,11 +22,17 @@ class SummarizeReadbacksTest(unittest.TestCase):
             "discard_page_write_bytes=2048 discard_dirty_bytes=1024 discard_covered_bytes=512 "
             "discard_full_requests=0 discard_zero_dirty_requests=0 amplification=128.0x",
         )
+        text = text.replace(
+            "downloaded_bytes=4096",
+            "downloaded_bytes=4096 direct_host_calls=2 direct_host_bytes=3072",
+        )
         intervals = summarize_readbacks.parse_intervals(text)
         result = summarize_readbacks.summarize(intervals, 0)
         self.assertEqual(result["window_kib"], 64)
         self.assertEqual(result["requests"], 4)
         self.assertEqual(result["downloaded_bytes"], 6144)
+        self.assertEqual(result["direct_host_calls"], 2)
+        self.assertEqual(result["direct_host_bytes"], 3072)
         self.assertEqual(result["amplification"], 192.0)
         self.assertEqual(result["finish_avg_ms_per_request"], 1.0)
         self.assertEqual(result["request_rate"], 100.0)
@@ -60,6 +66,8 @@ class SummarizeReadbacksTest(unittest.TestCase):
         self.assertEqual(intervals[0]["window_kib"], 512)
         self.assertEqual(intervals[0]["site_window_kib"], 0)
         self.assertEqual(intervals[0]["site_window_hits"], 0)
+        self.assertEqual(intervals[0]["direct_host_calls"], 0)
+        self.assertEqual(intervals[0]["direct_host_bytes"], 0)
         self.assertEqual(intervals[0]["discard_probe_hits"], 0)
         self.assertEqual(intervals[0]["discard_full_requests"], 0)
 

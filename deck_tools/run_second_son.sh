@@ -154,6 +154,48 @@ case "${readback_write_discard_probe}" in
     fi
     ;;
 esac
+host_visible_buffer_address_file="${SECOND_SON_HOST_VISIBLE_BUFFER_ADDRESS_FILE:-${data_root}/host-visible-buffer-address.txt}"
+host_visible_buffer_address_source="default"
+if [[ -n "${SECOND_SON_HOST_VISIBLE_BUFFER_ADDRESS:-}" ]]; then
+  host_visible_buffer_address="${SECOND_SON_HOST_VISIBLE_BUFFER_ADDRESS}"
+  host_visible_buffer_address_source="environment"
+elif [[ -r "${host_visible_buffer_address_file}" ]]; then
+  IFS= read -r host_visible_buffer_address <"${host_visible_buffer_address_file}" || true
+  host_visible_buffer_address="${host_visible_buffer_address:-off}"
+  host_visible_buffer_address_source="${host_visible_buffer_address_file}"
+else
+  host_visible_buffer_address="off"
+fi
+case "${host_visible_buffer_address}" in
+  off) ;;
+  *)
+    if [[ ! "${host_visible_buffer_address}" =~ ^0[xX][0-9a-fA-F]+$ ]] ||
+       [[ "${host_visible_buffer_address}" =~ ^0[xX]0+$ ]]; then
+      echo "Ignoring invalid host-visible buffer address '${host_visible_buffer_address}'; expected off or a nonzero hex address" >&2
+      host_visible_buffer_address="off"
+      host_visible_buffer_address_source="invalid-fallback"
+    fi
+    ;;
+esac
+host_visible_buffer_max_file="${SECOND_SON_HOST_VISIBLE_BUFFER_MAX_FILE:-${data_root}/host-visible-buffer-max-kb.txt}"
+host_visible_buffer_max_source="default"
+if [[ -n "${SECOND_SON_HOST_VISIBLE_BUFFER_MAX_KB:-}" ]]; then
+  host_visible_buffer_max_kb="${SECOND_SON_HOST_VISIBLE_BUFFER_MAX_KB}"
+  host_visible_buffer_max_source="environment"
+elif [[ -r "${host_visible_buffer_max_file}" ]]; then
+  IFS= read -r host_visible_buffer_max_kb <"${host_visible_buffer_max_file}" || true
+  host_visible_buffer_max_kb="${host_visible_buffer_max_kb:-512}"
+  host_visible_buffer_max_source="${host_visible_buffer_max_file}"
+else
+  host_visible_buffer_max_kb="512"
+fi
+if [[ ! "${host_visible_buffer_max_kb}" =~ ^[0-9]{2,5}$ ]] ||
+   (( 10#${host_visible_buffer_max_kb} < 64 || 10#${host_visible_buffer_max_kb} > 16384 ||
+      (10#${host_visible_buffer_max_kb} & (10#${host_visible_buffer_max_kb} - 1)) != 0 )); then
+  echo "Ignoring invalid host-visible buffer maximum '${host_visible_buffer_max_kb}'; expected a power-of-two KiB value from 64 through 16384" >&2
+  host_visible_buffer_max_kb="512"
+  host_visible_buffer_max_source="invalid-fallback"
+fi
 gpu_performance_file="${SECOND_SON_GPU_PERFORMANCE_FILE:-${data_root}/gpu-performance-level.txt}"
 gpu_performance_source="default"
 if [[ -n "${SECOND_SON_GPU_PERFORMANCE_LEVEL:-}" ]]; then
@@ -269,6 +311,10 @@ EOF
   echo "precise_readback_write_site_window_source=${readback_write_site_window_source}"
   echo "precise_readback_write_discard_probe=${readback_write_discard_probe}"
   echo "precise_readback_write_discard_probe_source=${readback_write_discard_probe_source}"
+  echo "host_visible_buffer_address=${host_visible_buffer_address}"
+  echo "host_visible_buffer_address_source=${host_visible_buffer_address_source}"
+  echo "host_visible_buffer_max_kb=${host_visible_buffer_max_kb}"
+  echo "host_visible_buffer_max_source=${host_visible_buffer_max_source}"
   echo "sleepq_stats=${sleepq_stats}"
   echo "sleepq_stats_source=${sleepq_stats_source}"
   echo "sleepq_stats_interval=${sleepq_stats_interval}"
@@ -535,6 +581,8 @@ XDG_DATA_HOME="${xdg_data}" MANGOHUD_CONFIGFILE="${mangohud_config}" \
   SHADPS4_PRECISE_READBACK_WINDOW_KB="${SHADPS4_PRECISE_READBACK_WINDOW_KB:-${readback_window_kb}}" \
   SHADPS4_PRECISE_READBACK_WRITE_SITE_WINDOW="${SHADPS4_PRECISE_READBACK_WRITE_SITE_WINDOW:-${readback_write_site_window}}" \
   SHADPS4_PRECISE_READBACK_WRITE_DISCARD_PROBE_PC="${SHADPS4_PRECISE_READBACK_WRITE_DISCARD_PROBE_PC:-${readback_write_discard_probe}}" \
+  SHADPS4_HOST_VISIBLE_BUFFER_ADDRESS="${SHADPS4_HOST_VISIBLE_BUFFER_ADDRESS:-${host_visible_buffer_address}}" \
+  SHADPS4_HOST_VISIBLE_BUFFER_MAX_KB="${SHADPS4_HOST_VISIBLE_BUFFER_MAX_KB:-${host_visible_buffer_max_kb}}" \
   SHADPS4_SLEEPQ_STATS="${SHADPS4_SLEEPQ_STATS:-${sleepq_stats}}" \
   SHADPS4_SLEEPQ_STATS_INTERVAL="${SHADPS4_SLEEPQ_STATS_INTERVAL:-${sleepq_stats_interval}}" \
   "${command[@]}" 2>&1 | tee "${run_dir}/console.log"

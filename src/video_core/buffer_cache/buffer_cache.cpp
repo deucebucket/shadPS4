@@ -114,6 +114,34 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
                         probe_pc);
         }
     }
+    if (const char* address = std::getenv("SHADPS4_HOST_VISIBLE_BUFFER_ADDRESS")) {
+        const std::string_view address_value{address};
+        char* end = nullptr;
+        const auto parsed = std::strtoull(address, &end, 0);
+        if (address_value.size() > 2 && address_value[0] == '0' &&
+            (address_value[1] == 'x' || address_value[1] == 'X') && parsed != 0 && end != address &&
+            *end == '\0') {
+            host_visible_buffer_address = parsed;
+        } else if (!address_value.empty() && address_value != "off") {
+            LOG_WARNING(Render_Vulkan,
+                        "Ignoring invalid host-visible buffer address '{}'; expected off or a "
+                        "nonzero hexadecimal guest address",
+                        address);
+        }
+    }
+    if (const char* max_kib = std::getenv("SHADPS4_HOST_VISIBLE_BUFFER_MAX_KB")) {
+        char* end = nullptr;
+        const auto parsed = std::strtoull(max_kib, &end, 10);
+        if (end != max_kib && *end == '\0' && parsed >= 64 && parsed <= 16'384 &&
+            (parsed & (parsed - 1)) == 0) {
+            host_visible_buffer_max_size = parsed * 1_KB;
+        } else {
+            LOG_WARNING(Render_Vulkan,
+                        "Ignoring invalid host-visible buffer maximum '{}'; expected a "
+                        "power-of-two KiB value from 64 through 16384",
+                        max_kib);
+        }
+    }
     if (precise_readback_stats_enabled) {
         precise_readback_interval_started_nanoseconds = SteadyClockNanoseconds();
         LOG_INFO(Render_Vulkan,
@@ -132,6 +160,12 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         LOG_INFO(Render_Vulkan,
                  "Behavior-neutral write-discard coverage probe enabled for guest PC {:#x}",
                  precise_readback_write_discard_probe_pc);
+    }
+    if (host_visible_buffer_address != 0) {
+        LOG_INFO(Render_Vulkan,
+                 "Host-visible cached-buffer selector enabled for guest address {:#x} with a {} "
+                 "KiB maximum allocation",
+                 host_visible_buffer_address, host_visible_buffer_max_size / 1_KB);
     }
 
     // Set up garbage collection parameters
@@ -203,6 +237,8 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write,
             request_sample.bytes += sample.bytes;
             request_sample.call_count += sample.call_count;
             request_sample.copy_count += sample.copy_count;
+            request_sample.direct_host_calls += sample.direct_host_calls;
+            request_sample.direct_host_bytes += sample.direct_host_bytes;
             request_sample.finish_nanoseconds += sample.finish_nanoseconds;
             request_sample.submit_nanoseconds += sample.submit_nanoseconds;
             request_sample.wait_nanoseconds += sample.wait_nanoseconds;
@@ -282,6 +318,8 @@ void BufferCache::RecordPreciseReadbackStats(VAddr device_addr, u64 size, bool i
     precise_readback_download_calls += sample.call_count;
     precise_readback_copy_count += sample.copy_count;
     precise_readback_downloaded_bytes += sample.bytes;
+    precise_readback_direct_host_calls += sample.direct_host_calls;
+    precise_readback_direct_host_bytes += sample.direct_host_bytes;
     precise_readback_no_downloads += sample.bytes == 0;
     precise_readback_finish_nanoseconds += sample.finish_nanoseconds;
     precise_readback_submit_nanoseconds += sample.submit_nanoseconds;
@@ -467,7 +505,8 @@ void BufferCache::LogPreciseReadbackStats() {
         "Precise readback stats: window_kib={} requests={} writes={} reads={} "
         "bounded_repeats={} "
         "tracked_pages={} requested_bytes={} download_calls={} copies={} downloaded_bytes={} "
-        "no_downloads={} finish_total_ms={:.3f} finish_avg_ms={:.3f} finish_max_ms={:.3f} "
+        "direct_host_calls={} direct_host_bytes={} no_downloads={} finish_total_ms={:.3f} "
+        "finish_avg_ms={:.3f} finish_max_ms={:.3f} "
         "submit_total_ms={:.3f} wait_total_ms={:.3f} submit_share_pct={:.1f} "
         "wait_share_pct={:.1f} queued_requests={} avg_outstanding_depth={:.2f} "
         "max_outstanding_depth={} wall_ms={:.3f} request_rate={:.1f} "
@@ -485,6 +524,7 @@ void BufferCache::LogPreciseReadbackStats() {
         precise_readback_requests - precise_readback_writes, precise_readback_bounded_repeats,
         tracked_pages, precise_readback_requested_bytes, precise_readback_download_calls,
         precise_readback_copy_count, precise_readback_downloaded_bytes,
+        precise_readback_direct_host_calls, precise_readback_direct_host_bytes,
         precise_readback_no_downloads, finish_total_ms, finish_average_ms, finish_max_ms,
         submit_total_ms, wait_total_ms, submit_share, wait_share, precise_readback_queued_requests,
         average_outstanding_depth, precise_readback_max_outstanding_depth, wall_ms,
@@ -520,6 +560,8 @@ void BufferCache::LogPreciseReadbackStats() {
     precise_readback_download_calls = 0;
     precise_readback_copy_count = 0;
     precise_readback_downloaded_bytes = 0;
+    precise_readback_direct_host_calls = 0;
+    precise_readback_direct_host_bytes = 0;
     precise_readback_no_downloads = 0;
     precise_readback_finish_nanoseconds = 0;
     precise_readback_submit_nanoseconds = 0;
@@ -568,6 +610,60 @@ BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& bu
     }
     sample.bytes = total_size_bytes;
     sample.call_count = 1;
+    const auto finish = [&] {
+        const auto finish_start = measure_finish ? std::chrono::steady_clock::now()
+                                                 : std::chrono::steady_clock::time_point{};
+        if (measure_finish) {
+            const auto timing = scheduler.FinishWithTiming();
+            sample.submit_nanoseconds = timing.submit_nanoseconds;
+            sample.wait_nanoseconds = timing.wait_nanoseconds;
+        } else {
+            scheduler.Finish();
+        }
+        if (measure_finish) {
+            sample.finish_nanoseconds =
+                static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                     std::chrono::steady_clock::now() - finish_start)
+                                     .count());
+        }
+    };
+
+    const VAddr buffer_addr = buffer.CpuAddr();
+    if (buffer.usage == MemoryUsage::CachedHost) {
+        ASSERT_MSG(!buffer.mapped_data.empty(), "Cached host buffer is not mapped");
+        sample.direct_host_calls = 1;
+        sample.direct_host_bytes = total_size_bytes;
+        scheduler.EndRendering();
+        const auto cmdbuf = scheduler.CommandBuffer();
+        const vk::BufferMemoryBarrier2 host_read_barrier = {
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+            .buffer = buffer.buffer,
+            .offset = 0,
+            .size = buffer.SizeBytes(),
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .dependencyFlags = vk::DependencyFlagBits::eByRegion,
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &host_read_barrier,
+        });
+        finish();
+        if (!buffer.is_coherent) {
+            vmaInvalidateAllocation(instance.GetAllocator(), buffer.buffer.allocation, 0,
+                                    buffer.SizeBytes());
+        }
+        for (const auto& copy : copies) {
+            ASSERT(copy.srcOffset + copy.size <= buffer.mapped_data.size());
+            const VAddr copy_device_addr = buffer_addr + copy.srcOffset;
+            memory->TryWriteBacking(std::bit_cast<u8*>(copy_device_addr),
+                                    buffer.mapped_data.data() + copy.srcOffset, copy.size);
+        }
+        memory_tracker->UnmarkRegionAsGpuModified(device_addr, size);
+        return sample;
+    }
+
     sample.copy_count = copies.size();
     const auto [download, offset] = download_buffer.Map(total_size_bytes);
     ASSERT_MSG(download != nullptr, "Buffer download of {} bytes exceeds the {} byte readback ring",
@@ -595,7 +691,6 @@ BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& bu
         .pBufferMemoryBarriers = &pre_barrier,
     });
     cmdbuf.copyBuffer(buffer.buffer, download_buffer.Handle(), copies);
-    const VAddr buffer_addr = buffer.CpuAddr();
     const auto write_data = [this, copies = std::move(copies), buffer_addr, device_addr, size,
                              download, offset, total_size_bytes]() {
         if (!download_buffer.is_coherent) {
@@ -611,21 +706,7 @@ BufferCache::ReadbackDownloadSample BufferCache::DownloadBufferMemory(Buffer& bu
         }
         memory_tracker->UnmarkRegionAsGpuModified(device_addr, size);
     };
-    const auto finish_start =
-        measure_finish ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-    if (measure_finish) {
-        const auto timing = scheduler.FinishWithTiming();
-        sample.submit_nanoseconds = timing.submit_nanoseconds;
-        sample.wait_nanoseconds = timing.wait_nanoseconds;
-    } else {
-        scheduler.Finish();
-    }
-    if (measure_finish) {
-        sample.finish_nanoseconds =
-            static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                 std::chrono::steady_clock::now() - finish_start)
-                                 .count());
-    }
+    finish();
     write_data();
     return sample;
 }
@@ -1072,9 +1153,21 @@ BufferId BufferCache::CreateBuffer(VAddr device_addr, u32 wanted_size) {
     wanted_size = static_cast<u32>(device_addr_end - device_addr);
     const OverlapResult overlap = ResolveOverlaps(device_addr, wanted_size);
     const u32 size = static_cast<u32>(overlap.end - overlap.begin);
-    const BufferId new_buffer_id =
-        slot_buffers.insert(instance, scheduler, MemoryUsage::DeviceLocal, overlap.begin,
-                            AllFlags | vk::BufferUsageFlagBits::eShaderDeviceAddress, size);
+    const bool contains_host_visible_selector = host_visible_buffer_address != 0 &&
+                                                overlap.begin <= host_visible_buffer_address &&
+                                                host_visible_buffer_address < overlap.end;
+    const bool use_host_visible =
+        contains_host_visible_selector && size <= host_visible_buffer_max_size;
+    if (contains_host_visible_selector) {
+        LOG_INFO(Render_Vulkan,
+                 "Host-visible cached-buffer candidate [{:#x}, {:#x}) size_kib={} maximum_kib={} "
+                 "selected={}",
+                 overlap.begin, overlap.end, size / 1_KB, host_visible_buffer_max_size / 1_KB,
+                 use_host_visible);
+    }
+    const BufferId new_buffer_id = slot_buffers.insert(
+        instance, scheduler, use_host_visible ? MemoryUsage::CachedHost : MemoryUsage::DeviceLocal,
+        overlap.begin, AllFlags | vk::BufferUsageFlagBits::eShaderDeviceAddress, size);
     auto& new_buffer = slot_buffers[new_buffer_id];
     for (const BufferId overlap_id : overlap.ids) {
         JoinOverlap(new_buffer_id, overlap_id, !overlap.has_stream_leap);

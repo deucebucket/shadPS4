@@ -27,6 +27,7 @@ namespace VideoCore {
 /// Hints and requirements for the backing memory type of a commit
 enum class MemoryUsage {
     DeviceLocal, ///< Requests device local buffer.
+    CachedHost,  ///< Requests mapped host memory for an opt-in cached guest buffer.
     Upload,      ///< Requires a host visible memory type optimized for CPU to GPU uploads
     Download,    ///< Requires a host visible memory type optimized for GPU to CPU readbacks
     Stream,      ///< Requests device local host visible buffer, falling back host memory.

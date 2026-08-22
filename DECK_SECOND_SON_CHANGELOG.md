@@ -108,6 +108,8 @@ session.
   array write while preserving all fork-only Steam Deck work.
 - Issue 61 tracks a standalone synthetic probe of direct Vulkan host-memory import before any
   attempt to replace the buffer cache's separate device-local shadow allocations.
+- Issue 65 tracks the first disabled-by-default runtime conversion of one measured cached buffer to
+  host-visible memory. It is a foreground correctness/performance gate, not a broad conversion.
 
 ## Local code changes
 
@@ -441,6 +443,34 @@ session.
   result clears a narrow, opt-in runtime-prototype gate, but it is not a gameplay, FPS, or full
   BufferCache result. Foreground correctness and performance A/B remain mandatory before any
   runtime path can be accepted.
+
+### Selective host-visible cached-buffer runtime prototype
+
+- Issue 65 tested the hottest measured guest address, `0x2edaf8000`, without embedding a game or
+  address in the emulator. An external selector converts only the containing BufferCache
+  allocation to mapped host-visible memory when its size stays below an explicit fail-closed cap;
+  absent, `off`, invalid, or over-cap selections preserve the device-local path.
+- The actual merged allocation was 5,104 KiB. A 512 KiB guard correctly refused it; an 8 MiB test
+  cap selected it. The direct readback path retained GPU-to-host barriers, synchronous completion,
+  non-coherent invalidation, guest-backing writes, tracker transitions, and all other buffers.
+- The standalone probe was strengthened first to use the full cached-buffer usage flags, including
+  shader device address. RADV returned nonzero device addresses for both imported host memory and
+  device-local memory, and the validation-layer benchmark remained clean.
+- Two candidate and two control foreground runs used the exact `4d49c813` binary. The selected path
+  rendered the correctly lit cannery scene with Delsin, kept 48 kHz stereo output and controller
+  input, and exited with status 0. A complete candidate screenshot and reverse-control screenshot
+  preserve the foreground proof.
+- Across final 400 samples, the two-run median FPS average changed from 9.977615 control to
+  9.993290 candidate (+0.157%) and median frame time from 100.224500 to 100.067525 ms (-0.157%).
+  This is measurement noise, not a demonstrated speedup. Final-eight readback finish time worsened
+  from 2,684.837 to 2,761.825 ms (+2.868%).
+- The candidate directly served an average 596,928 bytes in its final eight intervals, only 0.514%
+  of the 116,197,824 reported downloaded-byte average. The synthetic capability win does not
+  transfer because this single game buffer covers too little of the live workload.
+- The runtime selector is rejected as a performance change and restored to `off` with the 512 KiB
+  guard. Broad host-visible conversion is not justified because the compatible Deck memory type is
+  host-cached/coherent but not device-local. The next safe gate is behavior-neutral per-buffer
+  contribution measurement before any multi-buffer candidate is chosen.
 
 ## Runtime results
 
