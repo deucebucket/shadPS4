@@ -245,6 +245,19 @@ session.
   audio route, screenshots, and MangoHud/readback evidence. A regression closes the PR unmerged
   and leaves `4bea1e3` selected.
 - The preserved RPCS3/inFAMOUS 1 retail and HD setup remains outside this gate.
+- **Build receipt — 2026-08-23, 01:58:22 AM CDT:** the complete RelWithDebInfo Deck target linked
+  successfully with LLVM/Clang 20.1.8 in Freedesktop SDK 25.08. The pre-final documentation-head
+  binary is 133,622,104 bytes, SHA-256 `67b219514513d5ef86c7d83b021978ed58b63870e9ca421d69283e8c64c8a762`,
+  and embeds source identity `ff5a25323affe37f773d1c6fa377136054ebf373`.
+- **No-tool/no-blocker receipt:** state `present-unwired`. The fresh sync worktree lacked populated
+  submodules, so CMake stopped before compiling source. The maintained `shadPS4-dev` worktree
+  already had the exact pinned top-level dependencies and valid `build-deck` cache; a local
+  build-only branch wired candidate commit `ff5a2532` to that existing capability. No dependency
+  was downloaded, no game/runtime launched, and the result returned to the parent build gate as
+  `returned-with-capability`.
+- Four launcher evidence summarizer tests pass with `PYTHONPATH=deck_tools`; Python compilation and
+  Bash syntax checks pass. An initial invocation omitted that import path and ran zero tests; it is
+  a setup error, not a test failure or candidate evidence.
 
 ### Steam Deck CPU topology
 
