@@ -239,6 +239,23 @@ session.
 - This is a diagnostic split, not an accepted update. A complete Deck build and the same
   foreground control/candidate gate must determine whether the severe PR 90 stall remains. The
   main Deck shortcut and preserved RPCS3/inFAMOUS 1 setup remain untouched.
+- **Build and foreground rejection — 2026-08-23, 02:25:00 AM CDT:** the complete RelWithDebInfo
+  Deck build at exact PR head `2d7d5a3566a46aab217c809475b17ad62e82b53e` linked successfully.
+  Its binary is 133,629,480 bytes, SHA-256
+  `1b1e45c2983b450741f2e320119c7e8ff4e2e6743b79c377b21f00fc27c53118`, and embeds that source
+  identity. Four focused launcher tests and the dependency check pass.
+- Foreground run `20260823-022219-fork` reached the same cannery gameplay scene through the
+  separate Diagnostic Steam shortcut. Delsin, environment, text, and lighting remained correct;
+  the 48 kHz stereo stream and Steam controller route were active; clean and HUD screenshots were
+  saved; the GPU policy restored; and the run exited 0.
+- The sustained regression remained without the Neo MIMG revert. Against control run
+  `20260823-020459-fork`, final-600 median FPS fell from 6.671 to 2.000 (-70.022%), median frame
+  time rose from 149.903 to 500.046 ms (+233.579%), and mean GPU load fell from 74.032% to 8.508%.
+  Screenshot capture injected high-FPS presentation samples near teardown, so the final-600 mean
+  FPS is excluded; the median and visible 2 FPS HUD agree with the sustained pre-capture samples.
+- This closes the branch and draft PR unmerged. It proves that upstream's final Neo MIMG revert is
+  not required for the slowdown; it does not identify one culprit among the earlier commits. The
+  next exact split must stop before the SSA/virtual-register chain.
 
 ### Steam Deck CPU topology
 
