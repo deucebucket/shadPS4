@@ -224,6 +224,22 @@ session.
 - The ancestry merge was conflict-free and changed only that one index. All fork-only controller
   pose helpers and Steam Deck mappings remain intact; the full Deck build passes.
 
+### Upstream regression bisection: pre-MIMG boundary — 2026-08-23, 02:18:00 AM CDT
+
+- Issue 91 narrows the rejected eight-commit sync from issue 89 / PR 90. The exact selected Deck
+  runtime `4bea1e30498a8cdca1a63959f36ccc4d0eec9a4b` is merged with upstream boundary
+  `f952ac205b8b31f52e47c37a15e0b22b9558f2aa`; the candidate merge is
+  `a26ea3b3153edc1cffd0fa891f49634471c954c0`.
+- This includes the Nix, NP, trophy, SSA rewrite, virtual-register, SSA-destruction, and buffer
+  metadata-warning commits, while excluding only upstream's final Neo MIMG revert
+  `f51299942c6f98159232ce69840cd06cd26431fc`.
+- The same buffer-cache include conflict was resolved by retaining all fork timing, logging,
+  environment, and SpinLock includes while adding upstream's `magic_enum` include. Upstream's
+  metadata warning body applies unchanged; no fork readback logic was removed.
+- This is a diagnostic split, not an accepted update. A complete Deck build and the same
+  foreground control/candidate gate must determine whether the severe PR 90 stall remains. The
+  main Deck shortcut and preserved RPCS3/inFAMOUS 1 setup remain untouched.
+
 ### Steam Deck CPU topology
 
 - Live thread sampling showed `Game:Main` and `shadPS4:GpuComm` were frequently scheduled on CPUs 1
