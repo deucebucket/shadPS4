@@ -106,6 +106,9 @@ session.
   `rep movsq` readback site. It must prove exact dirty-byte coverage before any copy can be skipped.
 - Issue 59 tracks the one-commit upstream sync that corrects an out-of-bounds controller-combo
   array write while preserving all fork-only Steam Deck work.
+- Issue 89 tracks the eight-commit upstream shader/compiler sync through `f5129994`. The merge is
+  a candidate until the complete Deck build and exact foreground control/candidate run retain
+  Second Son visuals, input, audio, and performance.
 - Issue 61 tracks a standalone synthetic probe of direct Vulkan host-memory import before any
   attempt to replace the buffer cache's separate device-local shadow allocations.
 - Issue 67 tracks behavior-neutral attribution of precise-readback bytes and completion waits to
@@ -223,6 +226,25 @@ session.
   from `keys[3]` to the valid final element `keys[2]` of a three-element array.
 - The ancestry merge was conflict-free and changed only that one index. All fork-only controller
   pose helpers and Steam Deck mappings remain intact; the full Deck build passes.
+
+### Upstream shader/compiler correctness candidate — 2026-08-23, 01:50:56 AM CDT
+
+- Merged exact upstream main `f51299942c6f98159232ce69840cd06cd26431fc` into selected Deck
+  runtime `4bea1e30498a8cdca1a63959f36ccc4d0eec9a4b` on fork-only issue 89's topic
+  branch. The candidate merge is `dc75a52025fa2b3276b97bcdd401e6386df0308f`.
+- The eight upstream commits add shader SSA rewrite correctness, virtual registers, SSA
+  destruction, predicate reconstruction coverage, a buffer-cache metadata warning in place of an
+  assertion, and revert the recent Neo MIMG decoder work. Smaller Nix, NP, and trophy changes are
+  carried by exact ancestry rather than cherry-picked away.
+- The only merge conflict was the buffer-cache include block. The fork's timing, environment,
+  logging, and SpinLock includes were preserved together with upstream's `magic_enum` include;
+  upstream's assert-to-warning function body applied unchanged. No fork readback logic was
+  removed.
+- This is not yet an accepted improvement. It needs the full Deck build and one exact visible
+  control/candidate Second Son comparison with the same save, profile, GPU policy, controller,
+  audio route, screenshots, and MangoHud/readback evidence. A regression closes the PR unmerged
+  and leaves `4bea1e3` selected.
+- The preserved RPCS3/inFAMOUS 1 retail and HD setup remains outside this gate.
 
 ### Steam Deck CPU topology
 
