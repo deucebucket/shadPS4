@@ -240,15 +240,15 @@ session.
   logging, and SpinLock includes were preserved together with upstream's `magic_enum` include;
   upstream's assert-to-warning function body applied unchanged. No fork readback logic was
   removed.
-- This is not yet an accepted improvement. It needs the full Deck build and one exact visible
-  control/candidate Second Son comparison with the same save, profile, GPU policy, controller,
-  audio route, screenshots, and MangoHud/readback evidence. A regression closes the PR unmerged
-  and leaves `4bea1e3` selected.
+- This was tested as a candidate and rejected. The full Deck build and an exact visible
+  control/candidate Second Son comparison used the same save, profile, GPU policy, controller,
+  audio route, screenshot method, and MangoHud/readback evidence. The regression closes the PR
+  unmerged and leaves `4bea1e3` selected.
 - The preserved RPCS3/inFAMOUS 1 retail and HD setup remains outside this gate.
 - **Build receipt — 2026-08-23, 01:58:22 AM CDT:** the complete RelWithDebInfo Deck target linked
-  successfully with LLVM/Clang 20.1.8 in Freedesktop SDK 25.08. The pre-final documentation-head
-  binary is 133,622,104 bytes, SHA-256 `67b219514513d5ef86c7d83b021978ed58b63870e9ca421d69283e8c64c8a762`,
-  and embeds source identity `ff5a25323affe37f773d1c6fa377136054ebf373`.
+  successfully with LLVM/Clang 20.1.8 in Freedesktop SDK 25.08. The exact PR-head binary is
+  133,622,104 bytes, SHA-256 `00143df908f3c30d5422d6cac2c810dec336c54f49f1ceb6c60fa46bd6579a86`,
+  and embeds source identity `1b62475eac96cfe43585edb0d727f6816608ff01`.
 - **No-tool/no-blocker receipt:** state `present-unwired`. The fresh sync worktree lacked populated
   submodules, so CMake stopped before compiling source. The maintained `shadPS4-dev` worktree
   already had the exact pinned top-level dependencies and valid `build-deck` cache; a local
@@ -258,6 +258,22 @@ session.
 - Four launcher evidence summarizer tests pass with `PYTHONPATH=deck_tools`; Python compilation and
   Bash syntax checks pass. An initial invocation omitted that import path and ran zero tests; it is
   a setup error, not a test failure or candidate evidence.
+- **Foreground rejection — 2026-08-23, 02:15:00 AM CDT:** exact control run
+  `20260823-020459-fork` used the selected `4bea1e3` binary (374,620,432 bytes, SHA-256
+  `6d926c3354bb997c65a4e9e95c1e539f091585984b7a3ecba5571967ea26a9f9`) through the main Deck
+  Steam shortcut. Exact candidate run `20260823-021058-fork` used the PR-head binary through the
+  separate Diagnostic shortcut. Both reached the same cannery gameplay scene, rendered Delsin and
+  the environment correctly, retained the Steam controller route and active 48 kHz stereo output,
+  saved clean and HUD screenshots, restored the GPU policy, and exited 0.
+- The matched final-600 window rejects the candidate: median FPS fell from 6.671 to 1.936
+  (-70.982%), mean FPS fell from 12.294 to 1.942 (-84.203%), and median frame time rose from
+  149.903 to 516.589 ms (+244.616%). Mean GPU load fell from 74.032% to 8.123%, consistent with a
+  severe new idle/stall condition rather than useful GPU work. The candidate is visually correct
+  but substantially slower, so it is not promoted or merged.
+- This combined result does not identify which of the eight upstream commits causes the slowdown.
+  Any follow-up must bisect exact upstream boundaries under a new issue/PR and repeat the same
+  foreground gate; no individual shader, MIMG, metadata, NP, trophy, or Nix commit is blamed by
+  this A/B alone.
 
 ### Steam Deck CPU topology
 
