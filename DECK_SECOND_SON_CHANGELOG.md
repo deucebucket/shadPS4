@@ -9,6 +9,110 @@ This is the living record for the local Steam Deck-focused shadPS4 fork. An item
 improvement until it has been measured on the user's own legally dumped game in a visible Gamescope
 session.
 
+## Submit-boundary stream-watch batching — issue #150 — 2026-08-24
+
+### RR — Really Readable rundown
+
+- **What happened — Proven:** a runtime census found that 99.69% of sampled stream-buffer commits
+  and 90.75% of sampled upload-buffer commits extended an existing watch within the same command
+  buffer. Commit `0155d645` now defers each stream buffer's final bound until the scheduler assigns
+  the exact submission tick, while preserving an early record at ring-buffer wrap.
+- **What it means — Proven:** the per-commit `CurrentTick()` atomic read and watch-vector access are
+  gone. The exact hardware-cycle profile contains neither old leaf; the remaining concentrated leaf
+  is the two-field pending-bound store. The focused lock/watch suites pass 9/9, the existing Deck
+  suite passes 142/142, the portable optimized Linux target builds, and the exact-commit title run
+  exits 0 with 696 preloaded pipelines and no compilation or regeneration.
+- **Performance boundary — Proven:** the alternating warmed bracket averaged 29.40 versus 29.16
+  post-load FPS (+0.82%) and 28.27 versus 28.15 tail FPS (+0.43%). Tail mean frame time improved
+  from 36.42 to 36.24 ms (-0.49%), while p95 remained 50.00 ms. This is retained as a bounded CPU
+  efficiency change; the small FPS movement is not a material throughput claim.
+- **Why — Inference:** millions of same-command-buffer commits no longer repeat scheduler and
+  vector bookkeeping that can be done once at submission. The settled frame-time result is
+  directionally consistent but remains close to run variance.
+- **What happens next — Unknown:** the remaining simple pending-bound store is still a concentrated
+  sampling leaf. Resource binding, driver work, traversal, combat, long-session, controller/QTE,
+  audio, game-speed, and texture activation remain open.
+
+## Stream-watch cursor correction — issue #149 — 2026-08-24
+
+### RR — Really Readable rundown
+
+- **What happened — Proven:** software CPU-clock and hardware CPU-cycle profiles independently put
+  `StreamBuffer::Commit` at 14.38% and 13.19% of warmed Second Son GpuComm samples. The cursor is the
+  count of valid watches and points to the next free slot, but same-tick coalescing read that free
+  slot instead of the last valid watch. Commit `6c8cdfcf` restores the intended
+  one-watch-per-command-buffer invariant through a focused, standalone record helper.
+- **What it means — Proven:** same-tick commits extend the previous watch's upper bound, while a
+  new scheduler tick appends one watch. The focused suite passes 2/2, the combined lock/watch suite
+  passes 7/7, the existing Deck suite passes 142/142, and the portable optimized Linux executable
+  builds and completes the exact title run with clean cache/profile state.
+- **Performance boundary — Proven:** the candidate moved the concentrated cycle-sampling leaf to
+  the adjacent `CurrentTick()` atomic load rather than eliminating the high-frequency path. Its
+  four-run warmed bracket averaged 29.295 versus 29.180 post-load FPS (+0.39%; neutral) and 27.810
+  versus 28.395 tail FPS (-2.06%). No performance improvement is claimed.
+- **Why — Inference:** the correction removes redundant watch records and matches the wait-loop
+  count invariant, but the per-commit scheduler tick read remains. The bracket does not justify a
+  broader scheduling change.
+- **What happens next — Unknown:** prove a safe way to reduce high-frequency tick/path work without
+  weakening stream-buffer reuse synchronization. Interactive traversal, combat, long-session,
+  controller/QTE, audio, game-speed, and texture activation remain open.
+
+## Atomic VMA reader lock milestone — issue #148 — 2026-08-24
+
+### RR — Really Readable rundown
+
+- **What happened — Proven:** an exact warmed GpuComm profile attributed 274 of 297
+  `pthread_mutex_unlock` samples to the read-only `StreamBuffer::Copy` fallback. The lock was the
+  guest virtual-memory map's reader path, which entered a host mutex even without contention.
+  Commit `17859ca0` gives only that memory-manager lock an atomic reader fast path while preserving
+  writer exclusion, reader-first admission, recursive readers, try-lock behavior, and the existing
+  timed guest pthread implementation.
+- **What it means — Proven:** in the matched candidate profile, GpuComm
+  `pthread_mutex_unlock` residency fell from 17.00% (297/1,747 samples) to 1.57% (35/2,232), a
+  90.8% normalized reduction. The focused lock suite passes 5/5, the existing Deck suite passes
+  142/142, sustained 8-reader/1-writer stress found zero invariant failures, and the portable
+  optimized Linux executable builds successfully.
+- **Performance boundary — Proven:** the exact alternating warmed bracket averaged 28.965 versus
+  28.610 guest FPS after load (+1.24%) and 38.195 versus 38.700 ms mean frame time (-1.30%). The
+  final tails were 27.95 versus 27.96 FPS and effectively identical in mean and p95 frame time.
+  This is retained as a CPU-efficiency fix, not a material end-to-end FPS claim.
+- **Why — Inference:** uncontended virtual-memory readers no longer serialize through a host
+  mutex and condition-variable protocol. The small post-load difference is directionally
+  consistent with that reduced overhead, but it remains close enough to run variance that the
+  profiler evidence is the primary acceptance signal.
+- **What happens next — Unknown:** the candidate profile now places `StreamBuffer::Commit` at
+  14.38% of GpuComm samples. Its exact inline/assembly attribution must be proven before proposing
+  another change. Traversal, combat, long-session, controller/QTE, audio, game-speed, and texture
+  activation gates remain open.
+
+## Bazzite fidelity ceiling milestone — 2026-08-24
+
+### RR — Really Readable rundown
+
+- **What happened — Proven:** draft PR #139 now creates exact 1440p, 4K, and 8K Vulkan
+  swapchains, reports host vblanks separately from guest flips, and captures both the pre-scale
+  game buffer and post-scale output without desktop focus. Bounded 8K/120 reached the exact output
+  mode while using at most 10.51 GB VRAM and 50% GPU load on the RTX 3090.
+- **What it means:** 4K/120 and 8K/120 output are technically viable stress modes on this host, but
+  they are not native 4K/8K or 120 FPS gameplay. Second Son explicitly registers a 1920×1080 game
+  buffer, and the loaded unattended scene settles near 18–20 unique guest flips/s at both 60 and
+  120 Hz.
+- **What improved — Inference:** FSR EASU plus maximum RCAS sharpening retained about 1.3–2.1%
+  more grayscale edge energy than the plain scaler across four static-heavy matched-scene crops at
+  the 2560×1440 display size. It is the current clarity candidate, not a substitute for a native
+  resolution patch.
+- **Clean capture exit — Proven:** issue #140's bounded launcher candidate now asks shadPS4 to stop
+  through its stdin IPC before Gamescope removes the nested surface. A post-load run captured both
+  image modes, exited status 0, dumped the cache, avoided `ErrorSurfaceLostKHR`, left no processes,
+  and left the live Steam profile unchanged.
+- **What happens next — Unknown:** locate and guard the title's real resolution/allocation path,
+  test the existing motion-blur candidate, attribute the approximately 20 FPS slow phase, fix
+  interactive user-exit behavior, and complete controller/QTE/audio/game-speed validation before
+  changing the normal Steam profile.
+
+The complete hash-bound matrix and Proven/Inference/Unknown boundaries are in
+`deck_tools/SECOND_SON_FIDELITY_REFRESH.md`.
+
 ## Bazzite desktop integration milestone — 2026-08-24
 
 ### RR — Really Readable rundown

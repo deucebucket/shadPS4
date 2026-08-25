@@ -806,6 +806,7 @@ set(COMMON src/common/logging/classes.h
            src/common/scope_exit.h
            src/common/serdes.h
            src/common/sha1.h
+           src/common/atomic_shared_first_mutex.h
            src/common/shared_first_mutex.h
            src/common/signal_context.h
            src/common/signal_context.cpp
@@ -1084,6 +1085,7 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/amdgpu/tiling.h
                src/video_core/buffer_cache/buffer.cpp
                src/video_core/buffer_cache/buffer.h
+               src/video_core/buffer_cache/stream_buffer_watch.h
                src/video_core/buffer_cache/buffer_cache.cpp
                src/video_core/buffer_cache/buffer_cache.h
                src/video_core/buffer_cache/fault_manager.cpp
@@ -1101,6 +1103,7 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/renderer_vulkan/vk_compute_pipeline.h
                src/video_core/renderer_vulkan/vk_graphics_pipeline.cpp
                src/video_core/renderer_vulkan/vk_graphics_pipeline.h
+               src/video_core/renderer_vulkan/host_shader_cache.h
                src/video_core/renderer_vulkan/vk_instance.cpp
                src/video_core/renderer_vulkan/vk_instance.h
                src/video_core/renderer_vulkan/vk_master_semaphore.cpp

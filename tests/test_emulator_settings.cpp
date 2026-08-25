@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include "common/logging/log.h"
 #include "common/path_util.h"
 #include "common/scm_rev.h"
 #include "core/emulator_settings.h"
@@ -207,6 +208,21 @@ TEST(SettingTest, NoGameSpecificDefaultAndGlobalAgree) {
     EXPECT_EQ(s.get(ConfigMode::Default), s.get(ConfigMode::Global));
 }
 
+TEST_F(EmulatorSettingsTest, FilteredLogMessagesDoNotEvaluateArguments) {
+    auto logger = Common::Log::ALL_LOGGERS[Common::Log::Class::Config];
+    ASSERT_NE(logger, nullptr);
+    int evaluations = 0;
+
+    logger->set_level(spdlog::level::info);
+    LOG_DEBUG(Config, "Filtered argument evaluation {}", ++evaluations);
+    EXPECT_EQ(evaluations, 0);
+
+    logger->set_level(spdlog::level::debug);
+    LOG_DEBUG(Config, "Enabled argument evaluation {}", ++evaluations);
+    EXPECT_EQ(evaluations, 1);
+    logger->set_level(spdlog::level::info);
+}
+
 // tests for default settings
 
 TEST_F(EmulatorSettingsTest, SetDefaultValuesResetsAllGroupsToFactory) {
@@ -299,6 +315,22 @@ TEST_F(EmulatorSettingsTest, ReadbackWorkSubmitBudgetSupportsPerGameOverride) {
 
     temp_settings->SetConfigMode(ConfigMode::Global);
     EXPECT_EQ(temp_settings->GetReadbackWorkSubmitBudget(), 0u);
+}
+
+TEST_F(EmulatorSettingsTest, InternalScreenResolutionSupportsPerGameOverride) {
+    json game;
+    game["GPU"]["internal_screen_width"] = 1920;
+    game["GPU"]["internal_screen_height"] = 1080;
+    WriteJson(GameConfig("CUSA00223"), game);
+
+    ASSERT_TRUE(temp_settings->Load("CUSA00223"));
+    temp_settings->SetConfigMode(ConfigMode::Default);
+    EXPECT_EQ(temp_settings->GetInternalScreenWidth(), 1920u);
+    EXPECT_EQ(temp_settings->GetInternalScreenHeight(), 1080u);
+
+    temp_settings->SetConfigMode(ConfigMode::Global);
+    EXPECT_EQ(temp_settings->GetInternalScreenWidth(), 1280u);
+    EXPECT_EQ(temp_settings->GetInternalScreenHeight(), 720u);
 }
 
 // tests for global config.json file
@@ -717,6 +749,8 @@ TEST_F(EmulatorSettingsTest, GetAllOverrideableKeysContainsRepresentativeKeys) {
     EXPECT_TRUE(has("volume_slider"));
     // GPU
     EXPECT_TRUE(has("window_width"));
+    EXPECT_TRUE(has("internal_screen_width"));
+    EXPECT_TRUE(has("internal_screen_height"));
     EXPECT_TRUE(has("null_gpu"));
     EXPECT_TRUE(has("vblank_frequency"));
     // Vulkan
@@ -752,6 +786,8 @@ TEST_F(EmulatorSettingsTest, GetGPUOverrideableFieldsContainsWindowAndFullscreen
     };
     EXPECT_TRUE(has("window_width"));
     EXPECT_TRUE(has("window_height"));
+    EXPECT_TRUE(has("internal_screen_width"));
+    EXPECT_TRUE(has("internal_screen_height"));
     EXPECT_TRUE(has("full_screen"));
     EXPECT_TRUE(has("vblank_frequency"));
 }

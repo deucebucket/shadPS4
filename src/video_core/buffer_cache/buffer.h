@@ -10,7 +10,9 @@
 #include "common/types.h"
 #include "core/memory.h"
 #include "video_core/amdgpu/resource.h"
+#include "video_core/buffer_cache/stream_buffer_watch.h"
 #include "video_core/renderer_vulkan/vk_common.h"
+#include "video_core/renderer_vulkan/vk_submit_observer.h"
 
 namespace Vulkan {
 class Instance;
@@ -169,16 +171,22 @@ public:
     vk::PipelineStageFlagBits2 stage{vk::PipelineStageFlagBits2::eAllCommands};
 };
 
-class StreamBuffer : public Buffer {
+class StreamBuffer : public Buffer, private Vulkan::SubmitObserver {
 public:
     explicit StreamBuffer(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
                           MemoryUsage usage, u64 size_bytes_);
+    ~StreamBuffer();
 
     /// Reserves a region of memory from the stream buffer.
     std::pair<u8*, u64> Map(u64 size, u64 alignment = 0, bool allow_wait = true);
 
     /// Ensures that reserved bytes of memory are available to the GPU.
-    void Commit();
+    void Commit() {
+        if (!is_coherent) [[unlikely]] {
+            CommitNonCoherent();
+        }
+        offset = mapped_upper_bound;
+    }
 
     /// Maps and commits a memory region with user provided data
     u64 Copy(auto src, size_t size, size_t alignment = 0) {
@@ -195,24 +203,30 @@ public:
     }
 
 private:
-    struct Watch {
-        u64 tick{};
-        u64 upper_bound{};
-    };
+    void OnCommandBufferSubmit(u64 submitted_tick) override;
+
+    /// Flushes or invalidates the active range when host-visible memory is non-coherent.
+    void CommitNonCoherent();
+
+    /// Records a changed committed bound against an exact command-buffer timeline tick.
+    void RecordCommittedWatch(u64 tick);
 
     /// Increases the amount of watches available.
-    void ReserveWatches(std::vector<Watch>& watches, std::size_t grow_size);
+    void ReserveWatches(std::vector<Detail::StreamBufferWatch>& watches, std::size_t grow_size);
 
     /// Waits pending watches until requested upper bound.
     bool WaitPendingOperations(u64 requested_upper_bound, bool allow_wait);
 
 private:
     u64 offset{};
+    u64 mapped_offset{};
     u64 mapped_size{};
-    std::vector<Watch> current_watches;
+    u64 mapped_upper_bound{};
+    Detail::StreamBufferWatchRecorder watch_recorder;
+    std::vector<Detail::StreamBufferWatch> current_watches;
     std::size_t current_watch_cursor{};
     std::optional<size_t> invalidation_mark;
-    std::vector<Watch> previous_watches;
+    std::vector<Detail::StreamBufferWatch> previous_watches;
     std::size_t wait_cursor{};
     u64 wait_bound{};
 };
